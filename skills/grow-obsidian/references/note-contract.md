@@ -45,6 +45,8 @@ Typical one-off: 帮朋友做的一次课程作业、一份交完就结束的文
 
 The 2 KB ceiling still applies to everything except the 持续推进 tier — depth belongs in the source files, not the vault.
 
+**Merging is not an excuse to exceed the ceiling.** When many runs update one note in turn, each preserving the previous facts and adding its own, the note bloats — this has happened, taking a study-material note to 4.6 KB. Every write owns the whole block: fold duplicate lessons into one sharper line, drop process and counting detail (who found what in which pass, what an intermediate file was called), compress same-day 进展记录 into one line, keep 相关文件 to 3-4 paths. Cut until it fits before writing, not afterwards.
+
 ## The heart of the note
 
 The user's own words for what this vault is for: **"我学习了什么、我学会了什么、我做了什么"** — not an information flood.
