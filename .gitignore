@@ -1,0 +1,26 @@
+# Personal configuration and runtime data
+config.local.json
+.local/
+*.local.json
+*.log
+
+# Private exports and inventories
+exports/
+discovery-output/
+backups/
+reports/
+
+# Vault and platform files
+.obsidian/
+.trash/
+desktop.ini
+Thumbs.db
+
+# Editor and test artifacts
+.idea/
+.vscode/
+*.tmp
+*.bak
+
+# Bootstrap files accidentally generated at repository root
+/agents/

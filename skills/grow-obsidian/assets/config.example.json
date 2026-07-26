@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "vaultRoot": "D:\\Path\\To\\Your\\ObsidianVault",
+  "controllerDataRoot": "D:\\Path\\To\\Private\\grow-obsidian-data",
+  "semanticSources": [
+    {
+      "id": "projects",
+      "label": "Projects",
+      "path": "D:\\Path\\To\\Projects",
+      "topicGrouping": "top-level",
+      "topicDepth": 1
+    }
+  ],
+  "metadataOnlySources": [],
+  "destinations": {
+    "home": "00-Home",
+    "inbox": "00-Inbox",
+    "workProjects": "04-Work",
+    "learning": "03-Learning",
+    "reference": "90-Reference"
+  },
+  "scanPolicy": {
+    "stableMinutes": 30,
+    "initialLookbackDays": 30,
+    "maxFilesPerBatch": 30,
+    "maxTopicsPerRun": 3,
+    "maxFilesPerTopic": 8,
+    "maxSemanticFileBytes": 10485760,
+    "allowedExtensions": [
+      ".md",
+      ".txt",
+      ".docx",
+      ".pdf",
+      ".pptx",
+      ".xlsx",
+      ".csv",
+      ".json",
+      ".py",
+      ".js",
+      ".ts"
+    ],
+    "highValueExtensions": [
+      ".md",
+      ".docx",
+      ".pdf",
+      ".pptx",
+      ".xlsx"
+    ],
+    "highValueNameFragments": [
+      "final",
+      "report",
+      "summary",
+      "release"
+    ],
+    "lowValueNameFragments": [
+      "readme",
+      "test",
+      "check",
+      "preview",
+      "retry"
+    ],
+    "lowValueDirectoryFragments": [
+      "test",
+      "preview",
+      "render",
+      "retry",
+      "prompt"
+    ]
+  },
+  "privacy": {
+    "ignoredDirectories": [
+      ".git",
+      ".codex",
+      ".obsidian",
+      "node_modules",
+      "__pycache__",
+      "dist",
+      "build",
+      "cache",
+      "temp"
+    ],
+    "ignoredFileNames": [
+      ".env",
+      ".env.local",
+      "auth.json",
+      "credentials.json"
+    ],
+    "ignoredNameFragments": [
+      "token",
+      "secret",
+      "credential",
+      "password",
+      "api-key"
+    ],
+    "sensitiveNameFragments": [
+      "private-chat",
+      "mail-export",
+      "medical-record",
+      "relationship-analysis"
+    ],
+    "excludedPaths": []
+  },
+  "discovery": {
+    "consentGranted": false,
+    "roots": []
+  },
+  "features": {
+    "creatorInsights": {
+      "enabled": false,
+      "focusAreas": [],
+      "input": "distilled-notes-only"
+    }
+  }
+}

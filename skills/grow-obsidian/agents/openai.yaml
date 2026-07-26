@@ -1,0 +1,4 @@
+interface:
+  display_name: "Obsidian AutoGrow"
+  short_description: "Grow approved project work into an Obsidian knowledge base"
+  default_prompt: "Use $grow-obsidian to turn my approved project folders into a private weekly Obsidian knowledge base."

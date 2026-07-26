@@ -1,0 +1,91 @@
+---
+name: grow-obsidian
+description: Build, configure, audit, and run a privacy-conscious Obsidian knowledge-growth workflow that scans explicitly approved project folders, queues changes without losing work, distills outcomes into canonical notes, maintains category indexes, and optionally produces creator inspiration from already-distilled knowledge. Use when setting up automatic weekly Obsidian organization, migrating an existing personal automation, recommending a vault taxonomy after an authorized metadata scan, troubleshooting missed or duplicate notes, or preparing a portable GitHub-distributed workflow.
+---
+
+# Obsidian AutoGrow
+
+Turn approved project folders into a self-growing Obsidian knowledge base without copying raw work logs or silently monitoring the computer. Keep deterministic scan, queue, validation, and safe-write steps in scripts; use AI only for semantic grouping, classification, summarization, and optional inspiration.
+
+## Guardrails
+
+- Require explicit user approval for every scanned root. Never expand a configured root to a parent drive automatically.
+- Default to metadata-only discovery. Read file contents only for queued semantic sources.
+- Never read configured exclusions, secret-like files, caches, dependencies, raw mail stores, or private conversation exclusions.
+- Keep private paths and state in `config.local.json` and `.local/`; never put them in public examples.
+- Never advance work by a global timestamp alone. Enqueue every discovered version before advancing each source cursor.
+- Never mark queue items processed until all target notes were written successfully.
+- Preserve human-written text. Update only `AI-MAINTAINED` blocks through the safe-write script.
+- Keep the graph hierarchy `home -> category index -> content note`. Add cross-links only for real semantic relationships.
+- Treat psychology content as educational reflection, not diagnosis.
+- Keep creator insights opt-in and derive them from distilled notes, not background surveillance.
+
+## Choose the workflow
+
+- New installation or migration: follow [setup.md](references/setup.md).
+- Weekly run or manual preview: follow [weekly-workflow.md](references/weekly-workflow.md).
+- Taxonomy recommendation: follow [discovery-and-taxonomy.md](references/discovery-and-taxonomy.md).
+- Creator inspiration: follow [creator-insights.md](references/creator-insights.md).
+- Privacy or publication review: follow [privacy.md](references/privacy.md).
+- Note creation and updates: follow [note-contract.md](references/note-contract.md).
+
+## Core commands
+
+Resolve the script path relative to this file:
+
+```powershell
+$tool = "<skill-folder>\scripts\grow-obsidian.ps1"
+```
+
+Run the doctor before any write:
+
+```powershell
+& $tool -Command Doctor -ConfigPath "<controller>\config.local.json"
+```
+
+Scan approved roots and persist every eligible change:
+
+```powershell
+& $tool -Command Scan -ConfigPath "<controller>\config.local.json"
+```
+
+Request a fair batch without changing its state:
+
+```powershell
+& $tool -Command Next -ConfigPath "<controller>\config.local.json"
+```
+
+`Next` excludes sensitive candidates. Show those filenames to the user and run `Approve` only for IDs the user explicitly authorizes:
+
+```powershell
+& $tool -Command Approve -ConfigPath "<controller>\config.local.json" -ItemIds <ids>
+```
+
+After every note was safely written, acknowledge only the returned queue IDs:
+
+```powershell
+& $tool -Command Ack -ConfigPath "<controller>\config.local.json" -ItemIds <ids>
+```
+
+Show queue counts:
+
+```powershell
+& $tool -Command Status -ConfigPath "<controller>\config.local.json"
+```
+
+Use `Discover` only after confirming `discovery.consentGranted=true` and reviewing its exact roots. It inventories names, extensions, counts, and modification dates; it does not read content.
+
+## Semantic distillation
+
+For each `Next` batch:
+
+1. Group files by actual work topic, not merely by folder.
+2. Prefer final artifacts, reports, release notes, and meaningful source changes over caches and renders.
+3. Locate a canonical note before creating a new one.
+4. Produce concise facts: purpose, outcomes, problems solved, reusable learning, current status, next step, and provenance.
+5. Separate observed facts from inference.
+6. Route to one primary category. Add secondary links only when useful.
+7. Write through `scripts/apply-note.ps1`.
+8. Acknowledge queue IDs only after every grouped item was applied successfully.
+
+If any write or classification is uncertain, leave the items pending and report the uncertainty. Do not force completion.
