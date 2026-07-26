@@ -97,6 +97,24 @@ Obsidian分类与主笔记
 
 ## 安装 Skill
 
+### 推荐：直接让 Codex 安装
+
+把下面这段话发给 Codex：
+
+```text
+请从 https://github.com/cyxlsy/obsidian-autogrow 安装 grow-obsidian Skill，
+然后一步一步引导我选择 Obsidian 仓库、允许扫描的项目文件夹和每周运行时间。
+未经我明确批准，不要扫描其他目录。
+```
+
+用户只需要决定三件事：
+
+1. Obsidian仓库在哪里；
+2. 哪些项目文件夹允许分析，哪些目录只建立文件索引；
+3. 每周什么时候自动整理。
+
+### 手动安装
+
 克隆仓库后，将：
 
 ```text
