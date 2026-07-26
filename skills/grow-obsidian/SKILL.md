@@ -108,7 +108,9 @@ Use `Discover` only after confirming `discovery.consentGranted=true` and reviewi
 
 A note is a **memory aid for the user's future self**, not documentation. Most of the technical work in these folders was carried out by an AI on the user's instruction — reproducing that mechanism in the vault is worthless, because the user can simply ask an AI to do it again. What cannot be regenerated is their own memory of what they set out to do, decided, and produced.
 
-Keep every note **under 2 KB** (~30 seconds to read). Never write prompt text, schema/config keys, script internals, or per-frame metrics into a note; mention tooling in one short phrase. Titles must be recognizable at a glance months later, never technique-flavored. Full rules and section structure: [note-contract.md](references/note-contract.md).
+The heart of every note is `## 我学到了什么` — the user's own judgment, traps, and rules. Never write prompt text, schema/config keys, script internals, or per-frame metrics; mention tooling in one clause at most, and never as its own section. Titles must be recognizable at a glance months later, never technique-flavored.
+
+Length follows how much the project actually mattered, judged from the source folder's **活跃天数** (distinct days it was touched) and how recently: a still-running thread may take 4-6 KB with staged progress, a finished project ~2 KB, a one-off favour 0.5-1 KB with no forced lesson. Route each note by where its value sits — a shipped deliverable to `04-工作项目`, a capability learned (especially about using AI) to `03-AI学习`, study material to `90-资料库`. Full rules: [note-contract.md](references/note-contract.md).
 
 For each `Next` batch:
 
