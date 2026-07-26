@@ -16,18 +16,7 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
 
-function Normalize-Path {
-    param([string]$Path)
-    return [IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
-}
-
-function Test-PathWithin {
-    param([string]$Candidate, [string]$Parent)
-    $candidatePath = Normalize-Path $Candidate
-    $parentPath = Normalize-Path $Parent
-    return $candidatePath.Equals($parentPath, [StringComparison]::OrdinalIgnoreCase) -or
-        $candidatePath.StartsWith($parentPath + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
-}
+. (Join-Path $PSScriptRoot 'common.ps1')
 
 function Get-FileHashValue {
     param([string]$Path)
@@ -37,7 +26,10 @@ function Get-FileHashValue {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
-$config = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$config = Read-JsonFile $ConfigPath
+if (-not $config) {
+    throw "Config not found or empty: $ConfigPath"
+}
 $vaultRoot = Normalize-Path ([string]$config.vaultRoot)
 $dataRoot = Normalize-Path ([string]$config.controllerDataRoot)
 $notePath = Normalize-Path (Join-Path $vaultRoot $RelativeNotePath)
@@ -92,11 +84,6 @@ if ($startIndex -ge 0 -and $endIndex -gt $startIndex) {
     $newContent = $replacement + [Environment]::NewLine
 }
 
-$parent = Split-Path -Parent $notePath
-if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
-    New-Item -ItemType Directory -Path $parent -Force | Out-Null
-}
-
 $backupPath = $null
 if (Test-Path -LiteralPath $notePath -PathType Leaf) {
     $relative = $notePath.Substring($vaultRoot.Length).TrimStart('\', '/')
@@ -109,18 +96,7 @@ if (Test-Path -LiteralPath $notePath -PathType Leaf) {
     [IO.File]::Copy($notePath, $backupPath, $false)
 }
 
-$temporary = Join-Path $parent ('.grow-obsidian-' + [Guid]::NewGuid().ToString('N') + '.tmp')
-[IO.File]::WriteAllText($temporary, $newContent, [Text.UTF8Encoding]::new($false))
-if (Test-Path -LiteralPath $notePath -PathType Leaf) {
-    $replaceBackup = $notePath + '.replace-backup'
-    if (Test-Path -LiteralPath $replaceBackup -PathType Leaf) {
-        [IO.File]::Delete($replaceBackup)
-    }
-    [IO.File]::Replace($temporary, $notePath, $replaceBackup)
-    [IO.File]::Delete($replaceBackup)
-} else {
-    [IO.File]::Move($temporary, $notePath)
-}
+Write-TextAtomic -Path $notePath -Content $newContent
 
 [ordered]@{
     status = 'OK'

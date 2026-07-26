@@ -45,11 +45,19 @@ try {
 
     [IO.File]::WriteAllText((Join-Path $sourceA 'alpha-final.md'), 'alpha', [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $sourceA 'alpha-notes.txt'), 'notes', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $sourceA 'private-chat-log.md'), 'sensitive', [Text.UTF8Encoding]::new($false))
+    $nodeModules = Join-Path $sourceA 'node_modules\dep'
+    New-Item -ItemType Directory -Path $nodeModules -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $nodeModules 'dep.md'), 'dependency readme', [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $sourceB 'beta-report.md'), 'beta', [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $sourceB 'beta-code.py'), 'print(1)', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $sourceB 'big-report.md'), ('x' * 5000), [Text.UTF8Encoding]::new($false))
     $metadataProject = Join-Path $sourceMetadata 'wrapper\account\cloud\客户项目'
     New-Item -ItemType Directory -Path $metadataProject -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $metadataProject 'test.docx'), 'secret-content-must-not-appear', [Text.UTF8Encoding]::new($false))
+    $metadataCache = Join-Path $sourceMetadata 'wrapper\cache'
+    New-Item -ItemType Directory -Path $metadataCache -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $metadataCache 'cached.docx'), 'cache noise', [Text.UTF8Encoding]::new($false))
 
     $configPath = Join-Path $testRoot 'config.local.json'
     $config = [ordered]@{
@@ -78,7 +86,7 @@ try {
             initialLookbackDays = 10
             maxFilesPerBatch = 2
             maxTopicsPerRun = 2
-            maxSemanticFileBytes = 1048576
+            maxSemanticFileBytes = 4096
             allowedExtensions = @('.md', '.txt', '.py')
             highValueExtensions = @('.md')
             highValueNameFragments = @('final', 'report')
@@ -87,6 +95,7 @@ try {
             ignoredDirectories = @('.git', 'node_modules')
             ignoredFileNames = @('.env')
             ignoredNameFragments = @('token', 'secret')
+            sensitiveNameFragments = @('private-chat')
             excludedPaths = @()
         }
         discovery = [ordered]@{ consentGranted = $false; roots = @() }
@@ -104,9 +113,61 @@ try {
     $applyTool = Join-Path $SkillRoot 'scripts\apply-note.ps1'
     $catalogTool = Join-Path $SkillRoot 'scripts\catalog-metadata.ps1'
 
+    # --- Doctor ---
     $doctor = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Doctor'; ConfigPath = $configPath }
     Assert-True ($doctor.status -eq 'OK') 'Doctor should pass for isolated paths.'
+    Assert-True (@($doctor.warnings).Count -eq 0) 'Doctor should produce no warnings for a clean config.'
 
+    # --- Doctor: unknown-key warnings (typo protection) ---
+    $typoConfig = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    Add-Member -InputObject $typoConfig -NotePropertyName 'extraKey' -NotePropertyValue 1 -Force
+    Add-Member -InputObject $typoConfig.scanPolicy -NotePropertyName 'maxFilesPerBatchh' -NotePropertyValue 5 -Force
+    Add-Member -InputObject $typoConfig.features -NotePropertyName 'creatorInsight' -NotePropertyValue 1 -Force
+    $typoConfigPath = Join-Path $testRoot 'config-typo.json'
+    [IO.File]::WriteAllText($typoConfigPath, ($typoConfig | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+    $typoDoctor = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Doctor'; ConfigPath = $typoConfigPath }
+    Assert-True (@($typoDoctor.warnings | Where-Object { $_ -like '*extraKey*' }).Count -eq 1) 'Doctor must warn about unknown root keys.'
+    Assert-True (@($typoDoctor.warnings | Where-Object { $_ -like '*maxFilesPerBatchh*' }).Count -eq 1) 'Doctor must warn about misspelled scanPolicy keys.'
+    Assert-True (@($typoDoctor.warnings | Where-Object { $_ -like '*creatorInsight*' }).Count -eq 1) 'Doctor must warn about misspelled features keys.'
+
+    # --- Doctor: invalid values and unsafe layouts are errors ---
+    $invalidConfig = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    Add-Member -InputObject $invalidConfig.scanPolicy -NotePropertyName 'maxFilesPerTopic' -NotePropertyValue 0 -Force
+    $invalidMetadata = @($invalidConfig.metadataOnlySources)[0]
+    $invalidMetadata.destination = 'D:\evil-out.md'
+    $invalidMetadata.path = $sourceA
+    $invalidConfigPath = Join-Path $testRoot 'config-invalid.json'
+    [IO.File]::WriteAllText($invalidConfigPath, ($invalidConfig | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+    $invalidDoctor = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Doctor'; ConfigPath = $invalidConfigPath }
+    Assert-True ($invalidDoctor.status -eq 'ERROR') 'Invalid config values must fail Doctor.'
+    Assert-True (@($invalidDoctor.errors | Where-Object { $_ -like '*maxFilesPerTopic*' }).Count -eq 1) 'maxFilesPerTopic below one must be an error.'
+    Assert-True (@($invalidDoctor.errors | Where-Object { $_ -like '*relative to the vault*' }).Count -eq 1) 'Absolute metadata destinations must be rejected.'
+    Assert-True (@($invalidDoctor.errors | Where-Object { $_ -like '*overlaps a semantic source*' }).Count -ge 1) 'Metadata roots overlapping semantic roots must be rejected.'
+
+    # --- NewConfig onboarding ---
+    $newConfigTarget = Join-Path $testRoot 'fresh\config.local.json'
+    $newConfig = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'NewConfig'; TargetPath = $newConfigTarget }
+    Assert-True ($newConfig.status -eq 'OK') 'NewConfig must create a starter config.'
+    Assert-True (Test-Path -LiteralPath $newConfigTarget -PathType Leaf) 'NewConfig must write the target file.'
+    $starter = Get-Content -LiteralPath $newConfigTarget -Raw -Encoding UTF8 | ConvertFrom-Json
+    Assert-True ([int]$starter.schemaVersion -eq 1) 'Starter config must parse as JSON.'
+    $overwriteThrown = $false
+    try {
+        $null = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'NewConfig'; TargetPath = $newConfigTarget }
+    } catch {
+        $overwriteThrown = $_.Exception.Message.Contains('Refusing to overwrite')
+    }
+    Assert-True $overwriteThrown 'NewConfig must never overwrite an existing config.'
+
+    # --- Example config validates against the JSON schema (pwsh only) ---
+    $schemaPath = Join-Path $SkillRoot 'assets\config.schema.json'
+    if ((Get-Command Test-Json -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $schemaPath -PathType Leaf)) {
+        $exampleJson = Get-Content -LiteralPath (Join-Path $SkillRoot 'assets\config.example.json') -Raw -Encoding UTF8
+        $schemaJson = Get-Content -LiteralPath $schemaPath -Raw -Encoding UTF8
+        Assert-True (Test-Json -Json $exampleJson -Schema $schemaJson) 'config.example.json must validate against config.schema.json.'
+    }
+
+    # --- Init and metadata catalog ---
     $null = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Init'; ConfigPath = $configPath }
     $catalog = Invoke-JsonCommand -Tool $catalogTool -Parameters @{ ConfigPath = $configPath }
     Assert-True ($catalog.contentRead -eq $false) 'Metadata catalog must report contentRead=false.'
@@ -114,21 +175,57 @@ try {
     Assert-True ($catalogText.Contains('test.docx')) 'Metadata catalog must include the filename.'
     Assert-True ($catalogText.Contains('客户项目')) 'Metadata grouping must strip wrapper segments.'
     Assert-True (-not $catalogText.Contains('secret-content-must-not-appear')) 'Metadata catalog must not copy file content.'
-    $scan = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Scan'; ConfigPath = $configPath }
-    Assert-True ($scan.enqueued -eq 4) 'First scan should enqueue all four files.'
-    Assert-True ($scan.pending -eq 4) 'No queued file may be lost behind batch caps.'
+    Assert-True (-not $catalogText.Contains('cached.docx')) 'Metadata catalog must prune ignored directories.'
 
+    # --- Catalog: refuses to overwrite a human-authored destination ---
+    $catalogDestination = Join-Path $vault '04-Work\Catalog.md'
+    [IO.File]::WriteAllText($catalogDestination, '人工笔记内容', [Text.UTF8Encoding]::new($false))
+    $catalogRefuse = Invoke-JsonCommand -Tool $catalogTool -Parameters @{ ConfigPath = $configPath }
+    $refuseEntry = @($catalogRefuse.sources | Where-Object { $_.id -eq 'catalog' })[0]
+    Assert-True ($refuseEntry.status -eq 'SKIPPED_HUMAN_FILE') 'Catalog must refuse files without the generator sentinel.'
+    $refusedText = Get-Content -LiteralPath $catalogDestination -Raw -Encoding UTF8
+    Assert-True ($refusedText.Contains('人工笔记内容')) 'Human-authored destination content must be preserved.'
+
+    # --- Catalog: tolerates configs without a metadataOnlySources section ---
+    $noMetaConfig = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $noMetaConfig.PSObject.Properties.Remove('metadataOnlySources')
+    $noMetaConfigPath = Join-Path $testRoot 'config-nometa.json'
+    [IO.File]::WriteAllText($noMetaConfigPath, ($noMetaConfig | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+    $noMetaCatalog = Invoke-JsonCommand -Tool $catalogTool -Parameters @{ ConfigPath = $noMetaConfigPath }
+    Assert-True ($noMetaCatalog.status -eq 'OK') 'Catalog must handle configs without metadataOnlySources.'
+
+    # --- Scan: lossless queue, directory pruning, consent quarantine ---
+    $scan = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Scan'; ConfigPath = $configPath }
+    Assert-True ($scan.enqueued -eq 6) 'First scan should enqueue six files (node_modules pruned).'
+    Assert-True ($scan.pending -eq 6) 'No queued file may be lost behind batch caps.'
+    Assert-True ($scan.requiresConsent -eq 1) 'Sensitive filename must be quarantined for consent.'
+
+    # --- Next: fairness, consent exclusion, oversized exclusion ---
     $next = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Next'; ConfigPath = $configPath }
     Assert-True ($next.count -eq 2) 'Next must respect maxFilesPerBatch.'
     $sourceCount = @($next.items.sourceId | Sort-Object -Unique).Count
     Assert-True ($sourceCount -eq 2) 'Fair batch should include both sources.'
+    Assert-True ($next.requiresConsentCount -eq 1) 'Next must surface consent-required candidates.'
+    Assert-True (@($next.items | Where-Object { $_.relativePath -eq 'private-chat-log.md' }).Count -eq 0) 'Sensitive items must not enter the batch without approval.'
+    Assert-True ($next.oversizedCount -eq 1) 'Next must surface oversized candidates.'
+    Assert-True (@($next.items | Where-Object { $_.relativePath -eq 'big-report.md' }).Count -eq 0) 'Oversized items must not enter the batch.'
 
-    $ids = @($next.items.id)
-    $null = & $tool -Command Ack -ConfigPath $configPath -ItemIds $ids | Out-String
+    # --- Approve via short ID prefix ---
+    $sensitiveId = [string]$next.requiresConsent[0].id
+    $null = & $tool -Command Approve -ConfigPath $configPath -ItemIds @($sensitiveId.Substring(0, 12)) | Out-String
+    $nextAfterApprove = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Next'; ConfigPath = $configPath }
+    Assert-True ($nextAfterApprove.requiresConsentCount -eq 0) 'Approved sensitive items must leave the consent list.'
+
+    # --- Ack via short ID prefixes ---
+    $ackPrefixes = @($next.items | ForEach-Object { ([string]$_.id).Substring(0, 12) })
+    $ack = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Ack'; ConfigPath = $configPath; ItemIds = $ackPrefixes }
+    Assert-True ($ack.acknowledged -eq 2) 'Ack should process only selected items.'
     $status = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Status'; ConfigPath = $configPath }
-    Assert-True ($status.counts.processed -eq 2) 'Ack should process only selected items.'
-    Assert-True ($status.counts.pending -eq 2) 'Unselected items must remain pending.'
+    Assert-True ($status.counts.processed -eq 2) 'Ack should mark exactly the selected items processed.'
+    Assert-True ($status.counts.pending -eq 4) 'Unselected items must remain pending.'
+    Assert-True ($status.counts.oversizedPending -eq 1) 'Status must count oversized pending items.'
 
+    # --- apply-note: template, marker-bounded update, backup ---
     $noteRelative = '04-Work\Example.md'
     $block1 = Join-Path $testRoot 'block1.md'
     [IO.File]::WriteAllText($block1, '## 本轮成果' + [Environment]::NewLine + '第一版', [Text.UTF8Encoding]::new($false))
@@ -162,16 +259,195 @@ try {
     Assert-True (-not $secondText.Contains('第一版')) 'Old generated block must be replaced.'
     Assert-True ([bool]$secondApply.backupPath) 'Updating an existing note must create a backup.'
 
+    # --- apply-note: conflict detection ---
+    $conflictThrown = $false
+    try {
+        $null = Invoke-JsonCommand -Tool $applyTool -Parameters @{
+            ConfigPath = $configPath
+            RelativeNotePath = $noteRelative
+            GeneratedBlockPath = $block2
+            ExpectedCurrentHash = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
+        }
+    } catch {
+        $conflictThrown = $_.Exception.Message.Contains('Conflict')
+    }
+    Assert-True $conflictThrown 'A stale expected hash must be rejected.'
+
+    # --- apply-note: incomplete markers refuse to write ---
+    $brokenRelative = '04-Work\Broken.md'
+    $brokenPath = Join-Path $vault $brokenRelative
+    [IO.File]::WriteAllText($brokenPath, '<!-- AI-MAINTAINED:START -->' + [Environment]::NewLine + 'orphan', [Text.UTF8Encoding]::new($false))
+    $incompleteThrown = $false
+    try {
+        $null = Invoke-JsonCommand -Tool $applyTool -Parameters @{
+            ConfigPath = $configPath
+            RelativeNotePath = $brokenRelative
+            GeneratedBlockPath = $block2
+        }
+    } catch {
+        $incompleteThrown = $_.Exception.Message.Contains('incomplete')
+    }
+    Assert-True $incompleteThrown 'Incomplete markers must refuse modification.'
+
+    # --- Scan: newer version supersedes older pending version ---
+    $alphaNotes = Join-Path $sourceA 'alpha-notes.txt'
+    [IO.File]::WriteAllText($alphaNotes, 'notes version two with more content', [Text.UTF8Encoding]::new($false))
+    (Get-Item -LiteralPath $alphaNotes).LastWriteTimeUtc = [DateTime]::UtcNow
+    $scan2 = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Scan'; ConfigPath = $configPath }
+    Assert-True ($scan2.superseded -eq 1) 'A newer file version must supersede the older pending version.'
+    Assert-True ($scan2.enqueued -eq 1) 'Only the changed file should be enqueued on rescan.'
+
+    # --- Superseded items carry supersededUtc and resist Requeue ---
+    $queueSuperseded = Get-Content -LiteralPath (Join-Path $data 'queue.local.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $supersededItem = @($queueSuperseded.items | Where-Object { $_.status -eq 'superseded' })[0]
+    Assert-True ([bool]$supersededItem.supersededUtc) 'Supersede must stamp supersededUtc for later aging.'
+    $requeueSuperseded = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Requeue'; ConfigPath = $configPath; ItemIds = @(([string]$supersededItem.id).Substring(0, 12)) }
+    Assert-True ($requeueSuperseded.requeued -eq 0) 'Requeue must refuse superseded items to avoid duplicate queue entries.'
+
+    # --- Scan: deleted files are swept to missing ---
+    Remove-Item -LiteralPath (Join-Path $sourceB 'beta-code.py') -Force
+    $scan3 = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Scan'; ConfigPath = $configPath }
+    Assert-True ($scan3.missingMarked -eq 1) 'Deleted files must be marked missing instead of staying pending.'
+    $statusAfterMissing = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Status'; ConfigPath = $configPath }
+    Assert-True ($statusAfterMissing.counts.missing -eq 1) 'Status must count missing items.'
+
+    # --- Junctions are pruned during scan (cycle safety) ---
+    $junctionTarget = Join-Path $testRoot 'junction-target'
+    New-Item -ItemType Directory -Path $junctionTarget -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $junctionTarget 'loop-file.md'), 'loop', [Text.UTF8Encoding]::new($false))
+    $junctionPath = Join-Path $sourceA 'loop'
+    $null = cmd /c ('mklink /J "' + $junctionPath + '" "' + $junctionTarget + '" >nul 2>&1')
+    if (Test-Path -LiteralPath $junctionPath) {
+        $scanJunction = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Scan'; ConfigPath = $configPath }
+        Assert-True ($scanJunction.enqueued -eq 0) 'Files behind junctions must not be enqueued.'
+        $null = cmd /c ('rmdir "' + $junctionPath + '"')
+    }
+
+    # --- Fail and Requeue ---
+    $queueJson = Get-Content -LiteralPath (Join-Path $data 'queue.local.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $bigItem = @($queueJson.items | Where-Object { $_.relativePath -eq 'big-report.md' })[0]
+    $bigPrefix = ([string]$bigItem.id).Substring(0, 12)
+    $fail = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Fail'; ConfigPath = $configPath; ItemIds = @($bigPrefix); Reason = 'oversized beyond read budget' }
+    Assert-True ($fail.failed -eq 1) 'Fail must retire unprocessable items.'
+    $statusAfterFail = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Status'; ConfigPath = $configPath }
+    Assert-True ($statusAfterFail.counts.error -eq 1) 'Failed items must be counted as error.'
+    $requeue = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Requeue'; ConfigPath = $configPath; ItemIds = @($bigPrefix) }
+    Assert-True ($requeue.requeued -eq 1) 'Requeue must restore retired items.'
+    $statusAfterRequeue = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Status'; ConfigPath = $configPath }
+    Assert-True ($statusAfterRequeue.counts.error -eq 0) 'Requeued items must leave the error state.'
+
+    # --- Compact: superseded items age by supersede time, not discovery time ---
+    $backdateQueue = Get-Content -LiteralPath (Join-Path $data 'queue.local.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    foreach ($backdateItem in @($backdateQueue.items)) {
+        if ($backdateItem.status -eq 'superseded') {
+            $backdateItem.discoveredUtc = '2000-01-01T00:00:00.0000000Z'
+        }
+    }
+    [IO.File]::WriteAllText((Join-Path $data 'queue.local.json'), ($backdateQueue | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
+    $compactFresh = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Compact'; ConfigPath = $configPath; OlderThanDays = 30 }
+    Assert-True ($compactFresh.archived -eq 0) 'A freshly superseded item must not be archived by a 30-day compact, even if discovered long ago.'
+
+    # --- Compact: archive terminal history, prune old backups only ---
+    $compact = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Compact'; ConfigPath = $configPath; OlderThanDays = 0 }
+    Assert-True ($compact.archived -eq 3) 'Compact must archive processed and superseded history.'
+    $queueAfterCompact = Get-Content -LiteralPath (Join-Path $data 'queue.local.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    Assert-True (@($queueAfterCompact.items).Count -eq 4) 'Compact must keep active items in the queue.'
+    $archiveJson = Get-Content -LiteralPath (Join-Path $data 'queue-archive.local.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    Assert-True (@($archiveJson.items).Count -eq 3) 'Archived items must land in the archive file.'
+
+    $oldBackup = Join-Path $data 'backups\19990101T000000Z'
+    New-Item -ItemType Directory -Path $oldBackup -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $oldBackup 'old.md'), 'old backup', [Text.UTF8Encoding]::new($false))
+    $compact2 = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Compact'; ConfigPath = $configPath; OlderThanDays = 9999; PruneBackupsOlderThanDays = 30 }
+    Assert-True ($compact2.prunedBackupSets -ge 1) 'Old backup sets must be pruned on request.'
+    Assert-True (-not (Test-Path -LiteralPath $oldBackup)) 'The stale backup set must be removed.'
+    Assert-True (@(Get-ChildItem -LiteralPath (Join-Path $data 'backups') -Directory).Count -ge 1) 'Recent backup sets must survive pruning.'
+
+    # --- Retroactive excludedPaths: queued items under a newly excluded path stay out of batches ---
+    $exclConfig = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $exclConfig.privacy.excludedPaths = @($sourceB)
+    $exclConfigPath = Join-Path $testRoot 'config-excl.json'
+    [IO.File]::WriteAllText($exclConfigPath, ($exclConfig | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+    $exclNext = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Next'; ConfigPath = $exclConfigPath }
+    Assert-True ($exclNext.excludedCount -ge 1) 'Newly excluded paths must retroactively quarantine queued items.'
+    Assert-True (@($exclNext.items | Where-Object { $_.sourceId -eq 'b' }).Count -eq 0) 'No excluded-path item may enter a batch.'
+
+    # --- Discover: consent gate ---
+    $discoverThrown = $false
+    try {
+        $null = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Discover'; ConfigPath = $configPath }
+    } catch {
+        $discoverThrown = $_.Exception.Message.Contains('consent')
+    }
+    Assert-True $discoverThrown 'Discovery must refuse to run without explicit consent.'
+
+    # --- Discover: consented config without a roots key returns empty, not a crash ---
+    $discoverConfig = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $discoverConfig.discovery.consentGranted = $true
+    $discoverConfig.discovery.PSObject.Properties.Remove('roots')
+    $discoverConfigPath = Join-Path $testRoot 'config-discover.json'
+    [IO.File]::WriteAllText($discoverConfigPath, ($discoverConfig | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+    $discoverEmpty = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Discover'; ConfigPath = $discoverConfigPath }
+    Assert-True ($discoverEmpty.status -eq 'OK' -and @($discoverEmpty.roots).Count -eq 0) 'Discover must tolerate a missing roots key.'
+
+    # --- Report ---
+    $report = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Report'; ConfigPath = $configPath }
+    Assert-True ($report.status -eq 'OK') 'Report must succeed.'
+    Assert-True ($report.totals.pending -eq 3) 'Report totals must match queue state.'
+    Assert-True (Test-Path -LiteralPath ([string]$report.reportPath) -PathType Leaf) 'Report must persist a snapshot file.'
+
+    # --- Fairness: oldest backlog is served first, not alphabetical order ---
+    $queueEdit = Get-Content -LiteralPath (Join-Path $data 'queue.local.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    foreach ($queueItem in @($queueEdit.items)) {
+        if ($queueItem.sourceId -eq 'b' -and $queueItem.status -eq 'pending') {
+            $queueItem.discoveredUtc = '2000-01-01T00:00:00.0000000Z'
+        }
+    }
+    [IO.File]::WriteAllText((Join-Path $data 'queue.local.json'), ($queueEdit | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
+    $fairConfig = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $fairConfig.scanPolicy.maxTopicsPerRun = 1
+    $fairConfig.scanPolicy.maxFilesPerBatch = 1
+    $fairConfig.scanPolicy.maxSemanticFileBytes = 10485760
+    $fairConfigPath = Join-Path $testRoot 'config-fair.json'
+    [IO.File]::WriteAllText($fairConfigPath, ($fairConfig | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+    $fairNext = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Next'; ConfigPath = $fairConfigPath }
+    Assert-True (@($fairNext.topics)[0].sourceId -eq 'b') 'The source with the oldest backlog must be served first, regardless of alphabetical order.'
+
     [ordered]@{
         status = 'PASS'
         tests = @(
             'doctor'
-            'lossless queue'
-            'fair batching'
-            'acknowledgement'
-            'marker-bounded safe write'
-            'backup'
+            'doctor unknown-key warnings'
+            'doctor invalid values and unsafe layouts'
+            'newconfig onboarding'
+            'schema validation (pwsh only)'
             'metadata-only catalog'
+            'metadata directory pruning'
+            'catalog human-file refusal'
+            'catalog optional metadata section'
+            'lossless queue'
+            'semantic directory pruning'
+            'consent quarantine and prefix approve'
+            'fair batching'
+            'oversized exclusion'
+            'prefix acknowledgement'
+            'marker-bounded safe write'
+            'conflict detection'
+            'incomplete-marker refusal'
+            'backup'
+            'supersede'
+            'supersededUtc stamping and requeue refusal'
+            'missing sweep'
+            'junction pruning'
+            'fail and requeue'
+            'compact aging by terminal time'
+            'compact archive'
+            'backup pruning'
+            'retroactive excludedPaths'
+            'discover consent gate'
+            'discover empty roots'
+            'report'
+            'oldest-backlog fairness'
         )
     } | ConvertTo-Json -Depth 4
 } finally {

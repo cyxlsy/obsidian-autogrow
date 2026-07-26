@@ -37,6 +37,12 @@ Resolve the script path relative to this file:
 $tool = "<skill-folder>\scripts\grow-obsidian.ps1"
 ```
 
+For a brand-new user, generate a starter config first (never overwrites; the file carries a `$schema` reference for editor autocomplete):
+
+```powershell
+& $tool -Command NewConfig -TargetPath "<controller>\config.local.json"
+```
+
 Run the doctor before any write:
 
 ```powershell
@@ -55,11 +61,13 @@ Request a fair batch without changing its state:
 & $tool -Command Next -ConfigPath "<controller>\config.local.json"
 ```
 
-`Next` excludes sensitive candidates. Show those filenames to the user and run `Approve` only for IDs the user explicitly authorizes:
+`Next` excludes sensitive candidates and oversized candidates. Show sensitive filenames to the user and run `Approve` only for IDs the user explicitly authorizes. Oversized items (larger than `scanPolicy.maxSemanticFileBytes`) are listed under `oversized`; either retire them with `Fail` or let the user raise the limit.
 
 ```powershell
 & $tool -Command Approve -ConfigPath "<controller>\config.local.json" -ItemIds <ids>
 ```
+
+Every command that takes `-ItemIds` accepts full queue IDs or unique prefixes of at least 8 characters.
 
 After every note was safely written, acknowledge only the returned queue IDs:
 
@@ -67,11 +75,32 @@ After every note was safely written, acknowledge only the returned queue IDs:
 & $tool -Command Ack -ConfigPath "<controller>\config.local.json" -ItemIds <ids>
 ```
 
+Retire an item that can never be processed (corrupt, unsupported format, oversized), with a reason; reverse with `Requeue`:
+
+```powershell
+& $tool -Command Fail -ConfigPath "<controller>\config.local.json" -ItemIds <ids> -Reason "why"
+& $tool -Command Requeue -ConfigPath "<controller>\config.local.json" -ItemIds <ids>
+```
+
 Show queue counts:
 
 ```powershell
 & $tool -Command Status -ConfigPath "<controller>\config.local.json"
 ```
+
+Summarize per-source backlog age and persist a snapshot under `reports/`:
+
+```powershell
+& $tool -Command Report -ConfigPath "<controller>\config.local.json"
+```
+
+Periodically (for example monthly) archive old processed history and prune old backup sets:
+
+```powershell
+& $tool -Command Compact -ConfigPath "<controller>\config.local.json" -OlderThanDays 30 -PruneBackupsOlderThanDays 60
+```
+
+Scan marks queued files that vanished from disk as `missing` (they return to `pending` automatically if the file reappears). Sources whose root is unreachable are skipped without advancing their cursor, and partial enumeration failures are recorded in the per-source `lastError` state.
 
 Use `Discover` only after confirming `discovery.consentGranted=true` and reviewing its exact roots. It inventories names, extensions, counts, and modification dates; it does not read content.
 

@@ -6,25 +6,22 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
 
-function Normalize-Path {
-    param([string]$Path)
-    return [IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
-}
+. (Join-Path $PSScriptRoot 'common.ps1')
 
-function Test-PathWithin {
-    param([string]$Candidate, [string]$Parent)
-    $candidatePath = Normalize-Path $Candidate
-    $parentPath = Normalize-Path $Parent
-    return $candidatePath.Equals($parentPath, [StringComparison]::OrdinalIgnoreCase) -or
-        $candidatePath.StartsWith($parentPath + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
+$config = Read-JsonFile $ConfigPath
+if (-not $config) {
+    throw "Config not found or empty: $ConfigPath"
 }
-
-$config = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $vaultRoot = Normalize-Path ([string]$config.vaultRoot)
 $dataRoot = Normalize-Path ([string]$config.controllerDataRoot)
 $results = [System.Collections.Generic.List[object]]::new()
 
-foreach ($source in @($config.metadataOnlySources)) {
+$metadataSources = @()
+if (Test-HasProperty $config 'metadataOnlySources') {
+    $metadataSources = @($config.metadataOnlySources)
+}
+
+foreach ($source in $metadataSources) {
     if ($source.readFileContents -ne $false) {
         throw "Metadata source is not protected by readFileContents=false: $($source.id)"
     }
@@ -34,39 +31,35 @@ foreach ($source in @($config.metadataOnlySources)) {
         continue
     }
 
-    $extensions = if ($source.PSObject.Properties.Name -contains 'allowedExtensions') {
+    $extensions = if (Test-HasProperty $source 'allowedExtensions') {
         @($source.allowedExtensions | ForEach-Object { ([string]$_).ToLowerInvariant() })
     } else {
         @('.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.pdf', '.wps', '.et', '.dps')
     }
-    $strip = if ($source.PSObject.Properties.Name -contains 'stripPrefixSegments') { [int]$source.stripPrefixSegments } else { 0 }
-    $groupDepth = if ($source.PSObject.Properties.Name -contains 'groupDepth') { [int]$source.groupDepth } else { 1 }
+    $strip = if (Test-HasProperty $source 'stripPrefixSegments') { [int]$source.stripPrefixSegments } else { 0 }
+    $groupDepth = if (Test-HasProperty $source 'groupDepth') { [int]$source.groupDepth } else { 1 }
 
-    $includePrefixes = @(if ($source.PSObject.Properties.Name -contains 'includeRelativePrefixes') {
+    $includePrefixes = @(if (Test-HasProperty $source 'includeRelativePrefixes') {
         $source.includeRelativePrefixes | ForEach-Object { ([string]$_).TrimStart('\', '/') }
     } else {
         @() | Write-Output
     })
-    $ignoredDirectories = @(if ($source.PSObject.Properties.Name -contains 'ignoredDirectories') {
+    $ignoredDirectories = @(if (Test-HasProperty $source 'ignoredDirectories') {
         $source.ignoredDirectories | ForEach-Object { ([string]$_).ToLowerInvariant() }
     } else {
         @('cache', 'cachedata', 'temp') | Write-Output
     })
 
-    $files = @(Get-ChildItem -LiteralPath $root -File -Recurse -Force -ErrorAction SilentlyContinue | Where-Object {
+    $inaccessible = 0
+    $candidates = Get-CandidateFiles -Root $root -IgnoredDirectoryNames $ignoredDirectories -InaccessibleCount ([ref]$inaccessible)
+    $files = @($candidates | Where-Object {
         $candidateRelative = $_.FullName.Substring($root.Length).TrimStart('\', '/')
-        $candidateSegments = @($candidateRelative -split '[\\/]')
-        $candidateParents = if ($candidateSegments.Count -gt 1) { @($candidateSegments[0..($candidateSegments.Count - 2)]) } else { @() }
-        $hasIgnoredDirectory = @($candidateParents | Where-Object {
-            $_.StartsWith('.') -or $ignoredDirectories -contains $_.ToLowerInvariant()
-        }).Count -gt 0
         $matchesPrefix = $includePrefixes.Count -eq 0 -or @($includePrefixes | Where-Object {
             $candidateRelative.StartsWith($_, [StringComparison]::OrdinalIgnoreCase)
         }).Count -gt 0
 
         $_.Length -gt 0 -and
         -not $_.Name.StartsWith('~$') -and
-        -not $hasIgnoredDirectory -and
         $matchesPrefix -and
         $extensions -contains $_.Extension.ToLowerInvariant()
     } | ForEach-Object {
@@ -90,10 +83,16 @@ foreach ($source in @($config.metadataOnlySources)) {
     } | Sort-Object @{Expression = 'modified'; Descending = $true}, @{Expression = 'fullPath'; Descending = $false})
 
     $lines = [System.Collections.Generic.List[string]]::new()
-    $title = if ($source.PSObject.Properties.Name -contains 'title') { [string]$source.title } else { [string]$source.label + '索引' }
+    $title = if (Test-HasProperty $source 'title') {
+        [string]$source.title
+    } elseif (Test-HasProperty $source 'label') {
+        [string]$source.label + '索引'
+    } else {
+        '文件索引'
+    }
     $lines.Add('# ' + $title)
     $lines.Add('')
-    $lines.Add('> 本页由 Grow Obsidian 根据文件元数据生成，不读取或分析文档正文。')
+    $lines.Add('> 本页由 Obsidian AutoGrow 根据文件元数据生成，不读取或分析文档正文。')
     $lines.Add('')
     $lines.Add("- 文件数量：$($files.Count)")
     $latest = $files | Select-Object -First 1
@@ -111,13 +110,12 @@ foreach ($source in @($config.metadataOnlySources)) {
         $lines.Add('')
     }
 
+    if ([IO.Path]::IsPathRooted([string]$source.destination)) {
+        throw "Metadata destination must be relative to the vault: $($source.destination)"
+    }
     $destination = Normalize-Path (Join-Path $vaultRoot ([string]$source.destination))
     if (-not (Test-PathWithin $destination $vaultRoot)) {
         throw "Metadata destination is outside vault: $destination"
-    }
-    $parent = Split-Path -Parent $destination
-    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
-        New-Item -ItemType Directory -Path $parent -Force | Out-Null
     }
     $content = ($lines -join [Environment]::NewLine).TrimEnd() + [Environment]::NewLine
     $existing = if (Test-Path -LiteralPath $destination -PathType Leaf) {
@@ -128,6 +126,14 @@ foreach ($source in @($config.metadataOnlySources)) {
 
     if ($existing -eq $content) {
         $results.Add([PSCustomObject]@{ id = [string]$source.id; status = 'UNCHANGED'; fileCount = $files.Count; destination = $destination })
+        continue
+    }
+
+    # This tool regenerates the whole index file, so it must only ever
+    # overwrite files it generated itself. A file without the generator
+    # sentinel is human-authored; leave it untouched and report.
+    if ($existing -and -not ($existing.Contains('本页由 Obsidian AutoGrow') -or $existing.Contains('本页由 Grow Obsidian'))) {
+        $results.Add([PSCustomObject]@{ id = [string]$source.id; status = 'SKIPPED_HUMAN_FILE'; fileCount = $files.Count; destination = $destination })
         continue
     }
 
@@ -142,19 +148,8 @@ foreach ($source in @($config.metadataOnlySources)) {
         [IO.File]::Copy($destination, $backup, $false)
     }
 
-    $temporary = Join-Path $parent ('.grow-obsidian-' + [Guid]::NewGuid().ToString('N') + '.tmp')
-    [IO.File]::WriteAllText($temporary, $content, [Text.UTF8Encoding]::new($false))
-    if (Test-Path -LiteralPath $destination -PathType Leaf) {
-        $replaceBackup = $destination + '.replace-backup'
-        if (Test-Path -LiteralPath $replaceBackup -PathType Leaf) {
-            [IO.File]::Delete($replaceBackup)
-        }
-        [IO.File]::Replace($temporary, $destination, $replaceBackup)
-        [IO.File]::Delete($replaceBackup)
-    } else {
-        [IO.File]::Move($temporary, $destination)
-    }
-    $results.Add([PSCustomObject]@{ id = [string]$source.id; status = 'UPDATED'; fileCount = $files.Count; destination = $destination })
+    Write-TextAtomic -Path $destination -Content $content
+    $results.Add([PSCustomObject]@{ id = [string]$source.id; status = 'UPDATED'; fileCount = $files.Count; destination = $destination; inaccessibleDirectories = $inaccessible })
 }
 
 [ordered]@{

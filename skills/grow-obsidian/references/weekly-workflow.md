@@ -13,11 +13,24 @@
 
 ## Failure behavior
 
-- Leave items pending after any extraction, classification, or write failure.
-- Do not reset cursors to force retries; the queue is the retry mechanism.
-- Do not delete queue history during normal runs.
+- Leave items pending after a transient extraction, classification, or write failure; the queue is the retry mechanism.
+- Use `Fail -ItemIds <ids> -Reason "<why>"` for permanent failures (corrupt file, unsupported format, oversized) so they stop returning in every batch. `Requeue` reverses it.
+- Do not reset cursors to force retries.
+- Do not delete queue history during normal runs; use `Compact` for old terminal history.
 - A newer file version supersedes an older pending version of the same source path.
+- Files deleted from disk are swept to `missing` during `Scan` and return to `pending` if restored.
+- Oversized candidates never enter a batch; report them and let the user decide (raise the limit or `Fail` them).
 
-`Next` selects items round-robin across semantic sources so a noisy source cannot monopolize a run.
+`Next` serves sources oldest-backlog-first, so a source that keeps missing the topic cut rises to the front of later runs and cannot be starved.
 
-Treat historical backfill separately: increase `initialLookbackDays` before the first scan, then process the resulting queue over multiple runs without resetting state.
+Treat historical backfill separately: increase `initialLookbackDays` before the first scan, then process the resulting queue over multiple runs without resetting state. Run `Report` to watch per-source backlog age shrink between runs.
+
+## Maintenance
+
+Roughly monthly, run:
+
+```powershell
+& $tool -Command Compact -ConfigPath "<controller>\config.local.json" -OlderThanDays 30 -PruneBackupsOlderThanDays 60
+```
+
+This archives old processed/superseded history into `queue-archive.local.json` and removes timestamped backup sets older than the given number of days. Nothing pending, missing, or failed is touched.
