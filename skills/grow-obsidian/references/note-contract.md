@@ -101,6 +101,8 @@ The title must be recognizable to the user at a glance, months later. Use the wo
 
 One durable topic per note. Prefer updating an existing canonical note over creating a near-duplicate. Several folders may feed one note; one folder may hold several topics. Split only when the user would genuinely think of them as separate things.
 
+**One project, one note.** A sub-module, a page, a script, a config file, or a single stage is not its own note. Splitting one mini-program into seven sibling notes — the product, its question bank, its result page, its ranking board, its article section, its curriculum page, its login page — fills seven index lines with titles the owner cannot tell apart, which is the same information flood the 2 KB rule exists to prevent, just spread sideways. The 持续推进 tier grants 4-6 KB precisely so a project's parts can live in one place. Create a separate note only for something the user would call a different piece of work, such as a competition document versus the product it describes.
+
 ## Facts and inference
 
 Never fabricate. Separate observed facts from inference. When something is uncertain, say so briefly rather than omitting or overstating it. Psychology material is educational reflection, never diagnosis.
