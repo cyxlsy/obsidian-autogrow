@@ -1,0 +1,24 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run tests (PowerShell 7)
+        shell: pwsh
+        run: ./tests/run-tests.ps1
+
+      - name: Run tests (Windows PowerShell 5.1)
+        shell: powershell
+        run: .\tests\run-tests.ps1
+
+      - name: Publish privacy check
+        shell: pwsh
+        run: ./tools/publish-check.ps1

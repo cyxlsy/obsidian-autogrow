@@ -1,5 +1,7 @@
 # Obsidian AutoGrow
 
+简体中文 | [English](README.en.md)
+
 ### 让你做过的项目，自动长成可回顾的 Obsidian 知识库
 
 你照常在电脑里写方案、做项目、改代码。**Obsidian AutoGrow** 每周扫描你明确允许的文件夹，让 Codex 分析真正完成了什么、解决了什么问题、学到了什么方法，然后创建或更新 Obsidian 中的项目笔记。
@@ -78,13 +80,37 @@ Obsidian分类与主笔记
 
 - 每个来源拥有独立扫描进度；
 - 批次没有处理完的内容留在队列中，不会因更新时间推进而丢失；
-- 多来源轮流进入批次，避免一个活跃项目挤占全部名额；
+- 按"积压最久优先"轮流进入批次，任何来源都不会被其他活跃项目无限期挤占；
 - 新版本自动取代同一路径的旧待处理版本；
+- 被删除或改名的文件自动标记为 missing，不会永远堵在队列里；
+- 超过大小限制的文件单独列出，不会反复占用批次名额；
+- 敏感文件名（如聊天记录、心理分析）自动隔离，须明确授权才会读取；
+- 配置里出现未知或拼错的键会在体检时收到警告，隐私保护不会静默失效；
 - 只修改 `AI-MAINTAINED` 标记区域；
 - 写入前可校验当前文件哈希；
 - 修改已有笔记前在知识库外生成备份；
+- 提供 `Report`（积压概览）与 `Compact`（历史归档、备份清理）维护命令；
 - 目录发现必须明确授权，并且默认只读取元数据；
 - 创作者灵感默认关闭，只能分析已经提炼的笔记。
+
+## 命令一览
+
+| 命令 | 作用 |
+|---|---|
+| `NewConfig` | 生成配置骨架（带编辑器自动补全的 `$schema` 引用） |
+| `Doctor` | 配置体检：路径、重叠、必填项、未知键警告 |
+| `Init` | 初始化状态、队列、备份与报告目录 |
+| `Scan` | 扫描来源并入队；清扫 missing 文件；记录扫描错误 |
+| `Next` | 只读取出一个公平批次；单列敏感与超大文件 |
+| `Approve` | 授权读取被隔离的敏感文件 |
+| `Ack` | 确认写入成功的条目 |
+| `Fail` / `Requeue` | 淘汰无法处理的条目 / 恢复重排 |
+| `Status` | 队列各状态计数 |
+| `Report` | 各来源积压数量与最老积压天数，快照存入 `reports/` |
+| `Compact` | 归档旧历史到 `queue-archive.local.json`，可选清理旧备份 |
+| `Discover` | （须明确同意）只读元数据的目录盘点 |
+
+`-ItemIds` 接受完整队列 ID 或不少于 8 位的唯一前缀。
 
 ## 环境
 
@@ -115,24 +141,26 @@ Obsidian分类与主笔记
 
 ### 手动安装
 
-克隆仓库后，将：
+克隆仓库后，将 `skills/grow-obsidian` 复制到你所用 AI 助手的技能目录：
 
-```text
-skills/grow-obsidian
-```
+| 助手 | 技能目录 |
+|---|---|
+| Codex | `%USERPROFILE%\.codex\skills\grow-obsidian` |
+| Claude Code | `%USERPROFILE%\.claude\skills\grow-obsidian` |
 
-复制到：
-
-```text
-%USERPROFILE%\.codex\skills\grow-obsidian
-```
-
-也可以让 Codex 从 GitHub 仓库安装该 Skill。安装后重新打开任务，让 Codex 使用 `$grow-obsidian`。
+安装后重新打开任务，让助手使用 `$grow-obsidian`（Claude Code 中为 `/grow-obsidian`）。
 
 ## 初次配置
 
-1. 复制 [`config.example.json`](skills/grow-obsidian/assets/config.example.json) 为 `config.local.json`。
-2. 填写知识库位置、私人数据目录和用户明确允许的项目目录。
+1. 一条命令生成配置骨架（不会覆盖已有文件）：
+
+```powershell
+& ".\skills\grow-obsidian\scripts\grow-obsidian.ps1" -Command NewConfig -TargetPath ".\config.local.json"
+```
+
+配置文件带有 `$schema` 引用（[config.schema.json](skills/grow-obsidian/assets/config.schema.json)），在 VS Code 里编辑时每个字段都有自动补全和悬停说明。
+
+2. 填写知识库位置、私人数据目录和你明确允许分析的项目目录。
 3. 运行：
 
 ```powershell
@@ -182,10 +210,18 @@ $tool = ".\skills\grow-obsidian\scripts\grow-obsidian.ps1"
 
 详细边界见 [SECURITY.md](SECURITY.md)。
 
+## 日常维护
+
+积压较多时（例如首次回填了几个月的历史），每周批次会分多轮消化。建议：
+
+- 每次运行后看一眼 `Report` 输出的"最老积压天数"，确认在持续下降；
+- 大约每月运行一次 `Compact -OlderThanDays 30 -PruneBackupsOlderThanDays 60`，防止队列文件和备份无限膨胀；
+- `Next` 列出的超大文件（超过 `maxSemanticFileBytes`）不会自动处理：要么调大限制，要么用 `Fail` 淘汰。
+
 ## 测试
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File ".\tests\run-tests.ps1"
 ```
 
-测试在系统临时目录中验证无损队列、公平批次、确认机制、人工内容保护和备份。
+测试在系统临时目录中验证：无损队列、目录剪枝、敏感文件隔离与授权、公平批次（最老积压优先）、超大文件排除、短 ID 前缀、确认机制、人工内容保护、冲突检测、残缺标记拒写、备份、supersede、missing 清扫、Fail/Requeue、Compact 归档与备份清理、Discover 同意门槛和 Report。兼容 Windows PowerShell 5.1 与 PowerShell 7。

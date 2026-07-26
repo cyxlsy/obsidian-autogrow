@@ -2,6 +2,8 @@
 config.local.json
 .local/
 *.local.json
+*.local.txt
+.publish-private-patterns.local.txt
 *.log
 
 # Private exports and inventories

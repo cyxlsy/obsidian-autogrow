@@ -1,0 +1,295 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/cyxlsy/obsidian-autogrow/main/skills/grow-obsidian/assets/config.schema.json",
+  "title": "Obsidian AutoGrow configuration",
+  "description": "Configuration file for the Obsidian AutoGrow tool (grow-obsidian). Validated at runtime by the Invoke-Doctor function in grow-obsidian.ps1; this schema mirrors those checks so editors can flag problems while you type.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "vaultRoot",
+    "controllerDataRoot",
+    "semanticSources",
+    "scanPolicy"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional reference to this JSON Schema so editors can provide validation and hover help."
+    },
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1,
+      "description": "Configuration format version. Must be 1; any other value is rejected by Doctor."
+    },
+    "vaultRoot": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Absolute path to the Obsidian vault that AutoGrow writes notes into. Must exist and must not contain (or be contained by) controllerDataRoot or any source root."
+    },
+    "controllerDataRoot": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Absolute path to a private folder (outside the vault) where the controller stores its state: scan cursors, queues, run logs. Must not overlap vaultRoot or any source root."
+    },
+    "semanticSources": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Approved project folders whose file CONTENTS may be read and distilled into vault notes. At least one entry is required. Source roots must not overlap each other, the vault, or controllerDataRoot.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "path"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Unique identifier for this source (case-insensitive uniqueness enforced). Used in state files and topic keys; keep it short and stable."
+          },
+          "label": {
+            "type": "string",
+            "description": "Human-readable display name for this source, used in reports and generated notes."
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Absolute path to the source root folder. If temporarily unreachable (e.g. unmounted cloud drive) Scan skips it without losing work; it is an error only when no source is reachable."
+          },
+          "topicGrouping": {
+            "type": "string",
+            "enum": ["top-level", "source"],
+            "default": "top-level",
+            "description": "How files are grouped into topics: 'top-level' groups by the first topicDepth directory segments under the source root; 'source' treats the whole source as a single topic."
+          },
+          "topicDepth": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1,
+            "description": "Number of leading directory segments used as the topic key when topicGrouping is 'top-level'."
+          }
+        }
+      }
+    },
+    "metadataOnlySources": {
+      "type": "array",
+      "description": "Folders that are cataloged by file name and location only — file contents are NEVER read. Each entry produces an index note in the vault. Roots must not overlap any semantic source.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "path", "destination", "readFileContents"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Unique identifier for this metadata-only source (case-insensitive uniqueness enforced)."
+          },
+          "label": {
+            "type": "string",
+            "description": "Human-readable display name for this source."
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Absolute path to the folder to catalog. Only file names, sizes, and timestamps are collected."
+          },
+          "destination": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?![A-Za-z]:)(?![\\\\/])",
+            "description": "Vault-RELATIVE folder where the generated index note is written (e.g. '90-Reference'). Absolute paths (drive letters or leading slashes) are rejected; the resolved path must stay inside the vault."
+          },
+          "readFileContents": {
+            "type": "boolean",
+            "const": false,
+            "description": "Safety latch. Must be false: metadata-only sources never have their file contents read."
+          },
+          "title": {
+            "type": "string",
+            "description": "Title for the generated index note."
+          },
+          "includeRelativePrefixes": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "If set, only files whose vault-relative path starts with one of these prefixes are cataloged. Leading slashes are trimmed."
+          },
+          "ignoredDirectories": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Directory names to skip while cataloging this source."
+          },
+          "stripPrefixSegments": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0,
+            "description": "Number of leading directory segments to strip from each file's relative path before grouping."
+          },
+          "groupDepth": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1,
+            "description": "Number of directory segments (after stripping) used to group files in the index note."
+          },
+          "allowedExtensions": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "File extensions (with leading dot) to include in the catalog. Defaults to common office-document extensions when omitted."
+          }
+        }
+      }
+    },
+    "destinations": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Vault-relative folders the AI skill writes notes into, keyed by purpose. Keys are free-form (e.g. 'home', 'workProjects', or your own category names in any language); each value is a vault-relative folder like '04-Work'."
+    },
+    "scanPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "stableMinutes",
+        "initialLookbackDays",
+        "maxFilesPerBatch",
+        "maxTopicsPerRun",
+        "maxSemanticFileBytes",
+        "allowedExtensions"
+      ],
+      "description": "Controls which files Scan picks up and how much work a single run may do.",
+      "properties": {
+        "stableMinutes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "A file must be unmodified for at least this many minutes before Scan will pick it up, so half-written files are not distilled."
+        },
+        "initialLookbackDays": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "On the first scan of a source, only files modified within this many days are considered."
+        },
+        "maxFilesPerBatch": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum number of files handed to the AI in one run. Must be at least 1."
+        },
+        "maxTopicsPerRun": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum number of topics processed in one run. Must be at least 1."
+        },
+        "maxFilesPerTopic": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum number of files taken from a single topic per run. Doctor warns when maxFilesPerTopic * maxTopicsPerRun exceeds maxFilesPerBatch."
+        },
+        "maxSemanticFileBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Files larger than this many bytes are skipped by semantic scanning. Doctor warns when set below 1024."
+        },
+        "allowedExtensions": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" },
+          "description": "File extensions (with leading dot, e.g. '.md') eligible for semantic scanning. Must list at least one extension."
+        },
+        "highValueExtensions": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Extensions that raise a file's scan priority (e.g. polished documents)."
+        },
+        "highValueNameFragments": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Case-insensitive filename fragments that raise priority (e.g. 'final', 'report')."
+        },
+        "lowValueNameFragments": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Case-insensitive filename fragments that lower priority (e.g. 'test', 'preview')."
+        },
+        "lowValueDirectoryFragments": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Case-insensitive directory-path fragments that lower priority for files inside matching folders."
+        }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Exclusion rules that keep sensitive files out of scanning entirely. Doctor warns when this section is missing.",
+      "properties": {
+        "ignoredDirectories": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Directory names skipped everywhere (e.g. '.git', 'node_modules')."
+        },
+        "ignoredFileNames": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Exact file names that are never scanned (e.g. '.env', 'credentials.json')."
+        },
+        "ignoredNameFragments": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Case-insensitive filename fragments that exclude a file from scanning (e.g. 'token', 'secret')."
+        },
+        "sensitiveNameFragments": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Filename fragments that quarantine a file pending explicit user consent instead of processing it. Doctor warns when this list is empty."
+        },
+        "excludedPaths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Absolute paths (files or folders) excluded from all scanning."
+        }
+      }
+    },
+    "discovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional discovery of candidate source folders. Requires explicit consent before any filesystem enumeration.",
+      "properties": {
+        "consentGranted": {
+          "type": "boolean",
+          "description": "Must be true before the Discover command will enumerate folders. Defaults to false."
+        },
+        "roots": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Absolute paths of folders the Discover command may enumerate to suggest new sources."
+        }
+      }
+    },
+    "features": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional feature toggles.",
+      "properties": {
+        "creatorInsights": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Optional creator-insights feature that reflects on already-distilled notes.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Whether creator insights are generated. Defaults to false."
+            },
+            "focusAreas": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Optional focus areas to steer the insights (e.g. themes or skills to track)."
+            },
+            "input": {
+              "type": "string",
+              "const": "distilled-notes-only",
+              "description": "Input scope for insights. Must be 'distilled-notes-only': insights are derived from notes already in the vault, never from raw source files."
+            }
+          }
+        }
+      }
+    }
+  }
+}

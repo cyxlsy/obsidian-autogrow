@@ -1,4 +1,5 @@
 {
+  "$schema": "https://raw.githubusercontent.com/cyxlsy/obsidian-autogrow/main/skills/grow-obsidian/assets/config.schema.json",
   "schemaVersion": 1,
   "vaultRoot": "D:\\Path\\To\\Your\\ObsidianVault",
   "controllerDataRoot": "D:\\Path\\To\\Private\\grow-obsidian-data",
