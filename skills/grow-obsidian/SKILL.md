@@ -106,12 +106,16 @@ Use `Discover` only after confirming `discovery.consentGranted=true` and reviewi
 
 ## Semantic distillation
 
+A note is a **memory aid for the user's future self**, not documentation. Most of the technical work in these folders was carried out by an AI on the user's instruction — reproducing that mechanism in the vault is worthless, because the user can simply ask an AI to do it again. What cannot be regenerated is their own memory of what they set out to do, decided, and produced.
+
+Keep every note **under 2 KB** (~30 seconds to read). Never write prompt text, schema/config keys, script internals, or per-frame metrics into a note; mention tooling in one short phrase. Titles must be recognizable at a glance months later, never technique-flavored. Full rules and section structure: [note-contract.md](references/note-contract.md).
+
 For each `Next` batch:
 
 1. Group files by actual work topic, not merely by folder.
 2. Prefer final artifacts, reports, release notes, and meaningful source changes over caches and renders.
 3. Locate a canonical note before creating a new one.
-4. Produce concise facts: purpose, outcomes, problems solved, reusable learning, current status, next step, and provenance.
+4. Distill to what the user would want to remember: why it started, the visible deliverable, their own decisions, lessons that change future behavior, honest status, brief provenance.
 5. Separate observed facts from inference.
 6. Route to one primary category. Add secondary links only when useful.
 7. Write through `scripts/apply-note.ps1`.
