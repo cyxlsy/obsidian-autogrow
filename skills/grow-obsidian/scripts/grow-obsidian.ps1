@@ -1301,11 +1301,20 @@ function Get-InboxRoot {
     return $inbox
 }
 
-function Get-InboxIndexName {
-    # Obsidian folder notes are named after their folder (00-Inbox/00-Inbox.md).
-    # That note describes the inbox; it is never inbox content.
+function Get-InboxIndexNames {
+    # Obsidian folder notes are named after their folder (00-Inbox/00-Inbox.md),
+    # but vaults that number their folders usually drop the prefix inside them
+    # (00-收件箱/收件箱.md, matching 04-工作项目/工作项目.md). Accept both, or the
+    # note describing the inbox gets filed away as inbox content.
     param([string]$InboxRoot)
-    return ([IO.Path]::GetFileName($InboxRoot) + '.md').ToLowerInvariant()
+    $folder = [IO.Path]::GetFileName($InboxRoot)
+    $names = [System.Collections.Generic.List[string]]::new()
+    $names.Add(($folder + '.md').ToLowerInvariant())
+    $stripped = $folder -replace '^\d+[-_.\s]+', ''
+    if ($stripped -and $stripped -ne $folder) {
+        $names.Add(($stripped + '.md').ToLowerInvariant())
+    }
+    return ,$names.ToArray()
 }
 
 function Test-PlainTextFile {
@@ -1385,12 +1394,12 @@ function Invoke-Inbox {
     param([object]$Config)
 
     $inboxRoot = Get-InboxRoot $Config
-    $indexName = Get-InboxIndexName $inboxRoot
+    $indexNames = Get-InboxIndexNames $inboxRoot
     if (-not (Test-Path -LiteralPath $inboxRoot -PathType Container)) {
         return [ordered]@{
             status = 'NOT_FOUND'
             inboxPath = $inboxRoot
-            indexNote = $indexName
+            indexNote = @($indexNames)
             count = 0
             plainTextCount = 0
             inaccessibleDirectories = 0
@@ -1407,7 +1416,7 @@ function Invoke-Inbox {
     $items = [System.Collections.Generic.List[object]]::new()
     foreach ($file in $files) {
         $relative = $file.FullName.Substring($inboxRoot.Length).TrimStart('\', '/')
-        if ($relative.ToLowerInvariant() -eq $indexName) {
+        if ($indexNames -contains $relative.ToLowerInvariant()) {
             continue
         }
         $items.Add([PSCustomObject][ordered]@{
@@ -1426,7 +1435,7 @@ function Invoke-Inbox {
     return [ordered]@{
         status = 'OK'
         inboxPath = $inboxRoot
-        indexNote = $indexName
+        indexNote = @($indexNames)
         count = $ordered.Count
         plainTextCount = @($ordered | Where-Object { $_.isPlainText }).Count
         inaccessibleDirectories = $inaccessible
@@ -1472,7 +1481,7 @@ function Invoke-InboxClear {
     if (-not (Test-Path -LiteralPath $inboxRoot -PathType Container)) {
         throw "Inbox folder not found: $inboxRoot"
     }
-    $indexName = Get-InboxIndexName $inboxRoot
+    $indexNames = Get-InboxIndexNames $inboxRoot
 
     # Resolve every id before moving anything, so a typo in the last id cannot
     # leave the inbox half-cleared.
@@ -1491,7 +1500,7 @@ function Invoke-InboxClear {
             throw "Inbox item is outside the inbox folder: $id"
         }
         $relative = $candidate.Substring($inboxRoot.Length).TrimStart('\', '/')
-        if ($relative.ToLowerInvariant() -eq $indexName) {
+        if ($indexNames -contains $relative.ToLowerInvariant()) {
             throw "Refusing to move the inbox index note: $relative"
         }
         $kind = ''

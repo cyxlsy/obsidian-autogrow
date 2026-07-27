@@ -430,6 +430,21 @@ try {
     Assert-True ($inbox.status -eq 'OK') 'Inbox must list a configured inbox folder.'
     Assert-True ($inbox.count -eq 4) 'Inbox must list every dropped item, including nested ones.'
     Assert-True (@($inbox.items | Where-Object { $_.relativePath -eq '00-Inbox.md' }).Count -eq 0) 'The folder index note must never appear as an inbox item.'
+
+    # 编号文件夹里的索引笔记通常省掉编号前缀（00-收件箱/收件箱.md，与 04-工作项目/工作项目.md 一致），
+    # 只认全名会把这份说明当成待归类内容。
+    [IO.File]::WriteAllText((Join-Path $inboxFolder 'Inbox.md'), '# Inbox (prefix-stripped index note)', [Text.UTF8Encoding]::new($false))
+    $inboxStripped = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Inbox'; ConfigPath = $configPath }
+    Assert-True (@($inboxStripped.items | Where-Object { $_.relativePath -eq 'Inbox.md' }).Count -eq 0) 'A prefix-stripped index note (00-Inbox -> Inbox.md) must also be excluded.'
+    Assert-True ($inboxStripped.count -eq 4) 'Excluding the prefix-stripped index note must not change the item count.'
+    $strippedRefused = $false
+    try {
+        $null = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'InboxClear'; ConfigPath = $configPath; ItemIds = @('Inbox.md') }
+    } catch {
+        $strippedRefused = $_.Exception.Message.Contains('index note')
+    }
+    Assert-True $strippedRefused 'InboxClear must also refuse the prefix-stripped index note.'
+    Remove-Item -LiteralPath (Join-Path $inboxFolder 'Inbox.md') -Force
     Assert-True (@($inbox.items | Where-Object { $_.relativePath -eq 'clip\nested-note.md' }).Count -eq 1) 'Inbox items must carry a path relative to the inbox folder.'
     $textItem = @($inbox.items | Where-Object { $_.relativePath -eq '随手记.md' })[0]
     Assert-True ($textItem.isPlainText -eq $true) 'A Markdown drop must be reported as directly readable.'
@@ -556,6 +571,7 @@ try {
             'report'
             'oldest-backlog fairness'
             'inbox listing excludes the folder index note'
+            'inbox index note with stripped number prefix'
             'inbox plain-text detection'
             'inbox clear moves to archive'
             'inbox clear prunes emptied folders only'
