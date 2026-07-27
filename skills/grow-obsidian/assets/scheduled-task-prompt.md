@@ -2,6 +2,7 @@ Use $grow-obsidian to perform one bounded weekly knowledge-growth run.
 
 1. Read the local configuration path supplied with this task.
 2. Run Doctor and stop on any error.
+2b. Clear the inbox folder named by `destinations.inbox`: read each item, file it into the right canonical note or category through apply-note.ps1, then remove it from the inbox. Leave anything too vague to place, and report it.
 3. Run the metadata catalog script. Never read metadata-only source contents.
 4. Run Scan.
 5. Run Next.

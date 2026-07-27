@@ -1,5 +1,6 @@
 # Weekly workflow
 
+0. Clear the inbox first. If `destinations.inbox` is configured and its folder holds anything besides its own index note, read those items, decide for each whether it belongs in an existing canonical note or a category of its own, apply it through `apply-note.ps1`, and then remove the item from the inbox — it has been filed, so leaving a copy behind defeats the point. Items too vague to place stay put and are reported. Never route inbox items by filename alone; open them.
 1. Run `Doctor`.
 2. Run `catalog-metadata.ps1` for metadata-only sources without reading their contents.
 3. Run `Scan` to enqueue every stable eligible file version.
