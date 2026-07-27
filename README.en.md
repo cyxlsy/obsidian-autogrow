@@ -100,6 +100,8 @@ The technical invocation name stays `$grow-obsidian`; the product name on GitHub
 | `NewConfig` | Generate a starter config (with a `$schema` reference for editor autocomplete) |
 | `Doctor` | Config health check: paths, overlaps, required fields, unknown-key warnings |
 | `Init` | Initialize state, queue, backup, and report directories |
+| `Inbox` | List items waiting in the inbox folder (relative path, size, modification time, whether readable as text), excluding the folder's own index note |
+| `InboxClear` | Move filed items into `inbox-archive\<timestamp>\` (moved, never deleted) and remove folders the move left empty |
 | `Scan` | Scan sources and enqueue changes; sweep `missing` files; record scan errors |
 | `Next` | Read out one fair batch (read-only); lists sensitive and oversized files separately |
 | `Approve` | Authorize reading of quarantined sensitive files |
@@ -110,7 +112,7 @@ The technical invocation name stays `$grow-obsidian`; the product name on GitHub
 | `Compact` | Archive old history to `queue-archive.local.json`; optionally prune old backups |
 | `Discover` | (Explicit consent required) metadata-only directory inventory |
 
-`-ItemIds` accepts full queue IDs or unique prefixes of at least 8 characters.
+`-ItemIds` accepts full queue IDs or unique prefixes of at least 8 characters. `InboxClear` is the exception: it takes paths relative to the inbox folder.
 
 ## Environment
 
@@ -230,4 +232,4 @@ When the backlog is large (for example after backfilling months of history), the
 powershell -NoProfile -ExecutionPolicy Bypass -File ".\tests\run-tests.ps1"
 ```
 
-The tests run in the system temp directory and cover: the lossless queue, directory pruning, sensitive-file quarantine and approval, fair batching (oldest backlog first), oversized-file exclusion, short ID prefixes, the acknowledgment mechanism, human-content protection, conflict detection, refusal to write into broken markers, backups, supersede, `missing` sweeps, `Fail`/`Requeue`, `Compact` archiving and backup pruning, the `Discover` consent gate, and `Report`. Compatible with Windows PowerShell 5.1 and PowerShell 7.
+The tests run in the system temp directory and cover: the lossless queue, directory pruning, sensitive-file quarantine and approval, fair batching (oldest backlog first), oversized-file exclusion, short ID prefixes, the acknowledgment mechanism, human-content protection, conflict detection, refusal to write into broken markers, backups, supersede, `missing` sweeps, `Fail`/`Requeue`, `Compact` archiving and backup pruning, the `Discover` consent gate, `Report`, and the inbox (index-note exclusion, plain-text detection, archive-based clearing, and an unknown item aborting the whole call). Compatible with Windows PowerShell 5.1 and PowerShell 7.

@@ -1,6 +1,6 @@
 ﻿param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('NewConfig', 'Doctor', 'Init', 'Scan', 'Next', 'Approve', 'Ack', 'Fail', 'Requeue', 'Status', 'Report', 'Compact', 'Discover')]
+    [ValidateSet('NewConfig', 'Doctor', 'Init', 'Scan', 'Next', 'Approve', 'Ack', 'Fail', 'Requeue', 'Status', 'Report', 'Compact', 'Discover', 'Inbox', 'InboxClear')]
     [string]$Command,
 
     [string]$ConfigPath = '',
@@ -42,6 +42,7 @@ function Get-DataPaths {
         archive = Join-Path $root 'queue-archive.local.json'
         backups = Join-Path $root 'backups'
         reports = Join-Path $root 'reports'
+        inboxArchive = Join-Path $root 'inbox-archive'
     }
 }
 
@@ -1267,6 +1268,332 @@ function Invoke-Compact {
     }
 }
 
+$script:BinaryExtensions = @(
+    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods', '.odp',
+    '.zip', '.7z', '.rar', '.gz', '.tar', '.epub', '.mobi',
+    '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.tif', '.tiff', '.ico', '.heic', '.psd', '.ai',
+    '.mp3', '.wav', '.flac', '.m4a', '.mp4', '.mov', '.avi', '.mkv', '.webm',
+    '.exe', '.dll', '.so', '.dylib', '.ttf', '.otf', '.woff', '.woff2', '.db', '.sqlite'
+)
+
+function Get-InboxRoot {
+    # The inbox is a vault-relative folder named by destinations.inbox. Rooted
+    # or escaping values are rejected here rather than at write time so both
+    # Inbox and InboxClear fail the same way on a bad config.
+    param([object]$Config)
+    if (-not (Test-HasProperty $Config 'destinations') -or
+        -not (Test-HasProperty $Config.destinations 'inbox') -or
+        -not $Config.destinations.inbox) {
+        throw 'destinations.inbox is not configured; add it before using the Inbox commands.'
+    }
+    if (-not (Test-HasProperty $Config 'vaultRoot') -or -not $Config.vaultRoot) {
+        throw 'vaultRoot is required.'
+    }
+    $relative = [string]$Config.destinations.inbox
+    if ([IO.Path]::IsPathRooted($relative)) {
+        throw "destinations.inbox must be relative to the vault: $relative"
+    }
+    $vault = Normalize-Path ([string]$Config.vaultRoot)
+    $inbox = Normalize-Path (Join-Path $vault $relative)
+    if (-not (Test-PathWithin $inbox $vault) -or $inbox.Equals($vault, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "destinations.inbox must resolve to a folder inside the vault: $relative"
+    }
+    return $inbox
+}
+
+function Get-InboxIndexName {
+    # Obsidian folder notes are named after their folder (00-Inbox/00-Inbox.md).
+    # That note describes the inbox; it is never inbox content.
+    param([string]$InboxRoot)
+    return ([IO.Path]::GetFileName($InboxRoot) + '.md').ToLowerInvariant()
+}
+
+function Test-PlainTextFile {
+    # Tells the caller whether an item can be read directly. Extension covers
+    # the known container formats (a PDF has no NUL in its first bytes), and a
+    # NUL sniff catches everything else, including extensionless drops.
+    param([IO.FileInfo]$File)
+    if ($script:BinaryExtensions -contains $File.Extension.ToLowerInvariant()) {
+        return $false
+    }
+    if ($File.Length -le 0) {
+        return $true
+    }
+    $stream = $null
+    try {
+        $stream = [IO.File]::OpenRead($File.FullName)
+        $take = [int][Math]::Min(8192, $File.Length)
+        $buffer = New-Object byte[] $take
+        $read = $stream.Read($buffer, 0, $take)
+        for ($i = 0; $i -lt $read; $i++) {
+            if ($buffer[$i] -eq 0) {
+                return $false
+            }
+        }
+    } catch {
+        return $false
+    } finally {
+        if ($stream) {
+            $stream.Dispose()
+        }
+    }
+    return $true
+}
+
+function Test-SensitiveInboxItem {
+    # Inbox drops are deliberate, so nothing is filtered out; secret-like and
+    # sensitive names are only flagged so the caller confirms before reading.
+    param(
+        [string]$RelativePath,
+        [hashtable]$Context
+    )
+    $lowerPath = $RelativePath.ToLowerInvariant()
+    $lowerName = ([IO.Path]::GetFileName($RelativePath)).ToLowerInvariant()
+    if ($Context.ignoredFiles -contains $lowerName) {
+        return $true
+    }
+    foreach ($fragment in $Context.ignoredFragments) {
+        if ($lowerName.Contains($fragment)) {
+            return $true
+        }
+    }
+    foreach ($fragment in $Context.sensitiveFragments) {
+        if ($lowerPath.Contains($fragment)) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Get-InboxEmptyDirectories {
+    param([string]$InboxRoot)
+    $empty = [System.Collections.Generic.List[string]]::new()
+    foreach ($dir in @(Get-ChildItem -LiteralPath $InboxRoot -Directory -Recurse -Force -ErrorAction SilentlyContinue)) {
+        $children = @(Get-ChildItem -LiteralPath $dir.FullName -Force -ErrorAction SilentlyContinue)
+        if ($children.Count -eq 0) {
+            $empty.Add($dir.FullName.Substring($InboxRoot.Length).TrimStart('\', '/'))
+        }
+    }
+    # Emitted as individual strings so callers can wrap with @() or pipe.
+    return $empty.ToArray()
+}
+
+function Invoke-Inbox {
+    # Lists everything waiting in the inbox so filing it is a real command
+    # instead of an ad-hoc file search. Read-only: nothing is moved or opened
+    # beyond the first bytes needed to classify text versus binary.
+    param([object]$Config)
+
+    $inboxRoot = Get-InboxRoot $Config
+    $indexName = Get-InboxIndexName $inboxRoot
+    if (-not (Test-Path -LiteralPath $inboxRoot -PathType Container)) {
+        return [ordered]@{
+            status = 'NOT_FOUND'
+            inboxPath = $inboxRoot
+            indexNote = $indexName
+            count = 0
+            plainTextCount = 0
+            inaccessibleDirectories = 0
+            requiresReview = @()
+            emptyDirectories = @()
+            items = @()
+        }
+    }
+
+    $context = New-ScanContext $Config
+    $inaccessible = 0
+    $files = Get-CandidateFiles -Root $inboxRoot -IgnoredDirectoryNames @() -InaccessibleCount ([ref]$inaccessible)
+
+    $items = [System.Collections.Generic.List[object]]::new()
+    foreach ($file in $files) {
+        $relative = $file.FullName.Substring($inboxRoot.Length).TrimStart('\', '/')
+        if ($relative.ToLowerInvariant() -eq $indexName) {
+            continue
+        }
+        $items.Add([PSCustomObject][ordered]@{
+            relativePath = $relative
+            kind = 'file'
+            extension = $file.Extension.ToLowerInvariant()
+            sizeBytes = $file.Length
+            modifiedUtc = $file.LastWriteTimeUtc.ToString('o')
+            isPlainText = (Test-PlainTextFile $file)
+            sensitive = (Test-SensitiveInboxItem $relative $context)
+            fullPath = $file.FullName
+        })
+    }
+    $ordered = @($items | Sort-Object modifiedUtc, relativePath)
+
+    return [ordered]@{
+        status = 'OK'
+        inboxPath = $inboxRoot
+        indexNote = $indexName
+        count = $ordered.Count
+        plainTextCount = @($ordered | Where-Object { $_.isPlainText }).Count
+        inaccessibleDirectories = $inaccessible
+        requiresReview = @($ordered | Where-Object { $_.sensitive } | Select-Object relativePath, sizeBytes)
+        emptyDirectories = @(Get-InboxEmptyDirectories $inboxRoot)
+        items = $ordered
+    }
+}
+
+function Move-InboxEntry {
+    param(
+        [string]$From,
+        [string]$To,
+        [string]$Kind
+    )
+    if ($Kind -eq 'file') {
+        [IO.File]::Move($From, $To)
+        return
+    }
+    try {
+        [IO.Directory]::Move($From, $To)
+    } catch [IO.IOException] {
+        # Directory.Move cannot cross volumes, and a vault on a different drive
+        # than controllerDataRoot is a normal setup. Copy first, delete after.
+        Copy-Item -LiteralPath $From -Destination $To -Recurse -Force
+        Remove-Item -LiteralPath $From -Recurse -Force
+    }
+}
+
+function Invoke-InboxClear {
+    # Filed items leave the inbox by moving into a timestamped archive under
+    # controllerDataRoot, never by deletion: if a distillation later turns out
+    # wrong, the original drop is still on disk.
+    param(
+        [object]$Config,
+        [hashtable]$Paths,
+        [string[]]$Ids
+    )
+    if ($Ids.Count -eq 0) {
+        throw 'At least one ItemIds value is required.'
+    }
+    $inboxRoot = Get-InboxRoot $Config
+    if (-not (Test-Path -LiteralPath $inboxRoot -PathType Container)) {
+        throw "Inbox folder not found: $inboxRoot"
+    }
+    $indexName = Get-InboxIndexName $inboxRoot
+
+    # Resolve every id before moving anything, so a typo in the last id cannot
+    # leave the inbox half-cleared.
+    $planned = [System.Collections.Generic.List[object]]::new()
+    $seen = @{}
+    foreach ($id in $Ids) {
+        $trimmed = ([string]$id).Trim()
+        if ([string]::IsNullOrWhiteSpace($trimmed)) {
+            throw 'Inbox item path must not be empty.'
+        }
+        if ([IO.Path]::IsPathRooted($trimmed)) {
+            throw "Inbox item must be a path relative to the inbox folder: $id"
+        }
+        $candidate = Normalize-Path (Join-Path $inboxRoot $trimmed)
+        if (-not (Test-PathWithin $candidate $inboxRoot) -or $candidate.Equals($inboxRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Inbox item is outside the inbox folder: $id"
+        }
+        $relative = $candidate.Substring($inboxRoot.Length).TrimStart('\', '/')
+        if ($relative.ToLowerInvariant() -eq $indexName) {
+            throw "Refusing to move the inbox index note: $relative"
+        }
+        $kind = ''
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            $kind = 'file'
+        } elseif (Test-Path -LiteralPath $candidate -PathType Container) {
+            $kind = 'directory'
+        } else {
+            throw "Unknown inbox item: $id"
+        }
+        $key = $relative.ToLowerInvariant()
+        if ($seen.ContainsKey($key)) {
+            continue
+        }
+        $seen[$key] = $true
+        $planned.Add([PSCustomObject]@{
+            relativePath = $relative
+            fullPath = $candidate
+            kind = $kind
+        })
+    }
+
+    # Clearing a folder and something inside it in one call would move the
+    # parent first and then fail on a child that no longer exists, leaving the
+    # inbox half-cleared. Reject the overlap up front instead.
+    foreach ($outer in $planned) {
+        foreach ($inner in $planned) {
+            if ([string]$outer.fullPath -eq [string]$inner.fullPath) {
+                continue
+            }
+            if (Test-PathWithin ([string]$inner.fullPath) ([string]$outer.fullPath)) {
+                throw "Inbox items overlap; clear the folder or its contents, not both: $($outer.relativePath) | $($inner.relativePath)"
+            }
+        }
+    }
+
+    # Folders that were already empty before this run were not emptied by it,
+    # so they stay: this command only ever touches what it was asked to file.
+    $preExistingEmpty = @{}
+    foreach ($relativeDir in @(Get-InboxEmptyDirectories $inboxRoot)) {
+        $preExistingEmpty[$relativeDir.ToLowerInvariant()] = $true
+    }
+
+    $archiveRoot = Join-Path $Paths.inboxArchive ([DateTime]::UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'"))
+    $moved = [System.Collections.Generic.List[object]]::new()
+    foreach ($entry in $planned) {
+        $target = Join-Path $archiveRoot ([string]$entry.relativePath)
+        if (Test-Path -LiteralPath $target) {
+            throw "Archive target already exists: $target"
+        }
+        $targetParent = Split-Path -Parent $target
+        if (-not (Test-Path -LiteralPath $targetParent -PathType Container)) {
+            New-Item -ItemType Directory -Path $targetParent -Force | Out-Null
+        }
+        Move-InboxEntry ([string]$entry.fullPath) $target ([string]$entry.kind)
+        $moved.Add([PSCustomObject][ordered]@{
+            relativePath = [string]$entry.relativePath
+            kind = [string]$entry.kind
+            from = [string]$entry.fullPath
+            to = $target
+        })
+    }
+
+    # Folders emptied by the move carry no data; leaving them behind would make
+    # a cleared inbox still look occupied.
+    # Repeat until stable so a parent that only held the folder just removed is
+    # cleaned in the same run.
+    $pruned = [System.Collections.Generic.List[string]]::new()
+    for ($pass = 0; $pass -lt 32; $pass++) {
+        $removedThisPass = 0
+        foreach ($relativeDir in @(Get-InboxEmptyDirectories $inboxRoot | Sort-Object -Property Length -Descending)) {
+            if ($preExistingEmpty.ContainsKey($relativeDir.ToLowerInvariant())) {
+                continue
+            }
+            $directory = Join-Path $inboxRoot $relativeDir
+            if (-not (Test-Path -LiteralPath $directory -PathType Container)) {
+                continue
+            }
+            if (-not (Test-PathWithin $directory $inboxRoot) -or (Normalize-Path $directory).Equals($inboxRoot, [StringComparison]::OrdinalIgnoreCase)) {
+                continue
+            }
+            Remove-Item -LiteralPath $directory -Force
+            $pruned.Add($relativeDir)
+            $removedThisPass++
+        }
+        if ($removedThisPass -eq 0) {
+            break
+        }
+    }
+
+    $after = Invoke-Inbox $Config
+    return [ordered]@{
+        status = 'OK'
+        inboxPath = $inboxRoot
+        archiveRoot = $archiveRoot
+        movedCount = $moved.Count
+        moved = @($moved)
+        prunedDirectories = @($pruned)
+        remaining = $after['count']
+    }
+}
+
 function Invoke-NewConfig {
     # One-command onboarding: copies the shipped example config so a new user
     # never has to hunt for the right JSON shape. Never overwrites.
@@ -1385,6 +1712,8 @@ $result = switch ($Command) {
     'Report' { Invoke-Report $paths $config }
     'Compact' { Invoke-Compact $paths $OlderThanDays $PruneBackupsOlderThanDays }
     'Discover' { Invoke-Discover $config }
+    'Inbox' { Invoke-Inbox $config }
+    'InboxClear' { Invoke-InboxClear $config $paths $ItemIds }
 }
 
 $result | ConvertTo-Json -Depth 12

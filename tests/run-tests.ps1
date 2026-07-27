@@ -80,7 +80,7 @@ try {
                 groupDepth = 1
             }
         )
-        destinations = [ordered]@{ home = '00-Home'; workProjects = '04-Work' }
+        destinations = [ordered]@{ home = '00-Home'; inbox = '00-Inbox'; workProjects = '04-Work' }
         scanPolicy = [ordered]@{
             stableMinutes = 0
             initialLookbackDays = 10
@@ -413,6 +413,113 @@ try {
     $fairNext = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Next'; ConfigPath = $fairConfigPath }
     Assert-True (@($fairNext.topics)[0].sourceId -eq 'b') 'The source with the oldest backlog must be served first, regardless of alphabetical order.'
 
+    # --- Inbox: listing excludes the folder index note ---
+    $inboxFolder = Join-Path $vault '00-Inbox'
+    $inboxNested = Join-Path $inboxFolder 'clip'
+    $inboxKeepEmpty = Join-Path $inboxFolder 'keep-empty'
+    foreach ($path in @($inboxFolder, $inboxNested, $inboxKeepEmpty)) {
+        New-Item -ItemType Directory -Path $path -Force | Out-Null
+    }
+    [IO.File]::WriteAllText((Join-Path $inboxFolder '00-Inbox.md'), '# 收件箱索引', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $inboxFolder '随手记.md'), '一个零碎想法', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $inboxFolder 'snippet.txt'), 'plain text drop', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $inboxNested 'nested-note.md'), 'nested drop', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllBytes((Join-Path $inboxFolder 'photo.png'), [byte[]](0x89, 0x50, 0x4E, 0x47, 0x00, 0x01, 0x02))
+
+    $inbox = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Inbox'; ConfigPath = $configPath }
+    Assert-True ($inbox.status -eq 'OK') 'Inbox must list a configured inbox folder.'
+    Assert-True ($inbox.count -eq 4) 'Inbox must list every dropped item, including nested ones.'
+    Assert-True (@($inbox.items | Where-Object { $_.relativePath -eq '00-Inbox.md' }).Count -eq 0) 'The folder index note must never appear as an inbox item.'
+    Assert-True (@($inbox.items | Where-Object { $_.relativePath -eq 'clip\nested-note.md' }).Count -eq 1) 'Inbox items must carry a path relative to the inbox folder.'
+    $textItem = @($inbox.items | Where-Object { $_.relativePath -eq '随手记.md' })[0]
+    Assert-True ($textItem.isPlainText -eq $true) 'A Markdown drop must be reported as directly readable.'
+    Assert-True ($textItem.extension -eq '.md' -and [long]$textItem.sizeBytes -gt 0 -and [bool]$textItem.modifiedUtc) 'Inbox items must carry extension, size, and modification time.'
+    $binaryItem = @($inbox.items | Where-Object { $_.relativePath -eq 'photo.png' })[0]
+    Assert-True ($binaryItem.isPlainText -eq $false) 'A binary drop must not be reported as directly readable.'
+    Assert-True (@($inbox.emptyDirectories) -contains 'keep-empty') 'An empty dropped folder must still be visible to the caller.'
+
+    # --- InboxClear: filed items move to the archive instead of being deleted ---
+    $clear = Invoke-JsonCommand -Tool $tool -Parameters @{
+        Command = 'InboxClear'
+        ConfigPath = $configPath
+        ItemIds = @('随手记.md', 'clip\nested-note.md')
+    }
+    Assert-True ($clear.movedCount -eq 2) 'InboxClear must move exactly the requested items.'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $inboxFolder '随手记.md'))) 'A cleared item must leave its inbox position.'
+    Assert-True (Test-Path -LiteralPath (Join-Path ([string]$clear.archiveRoot) '随手记.md') -PathType Leaf) 'A cleared item must land in the timestamped archive.'
+    Assert-True (Test-Path -LiteralPath (Join-Path ([string]$clear.archiveRoot) 'clip\nested-note.md') -PathType Leaf) 'The archive must preserve the inbox-relative layout.'
+    Assert-True (Test-PathWithin ([string]$clear.archiveRoot) $data) 'The inbox archive must live under controllerDataRoot.'
+    Assert-True (@($clear.prunedDirectories) -contains 'clip') 'A folder emptied by clearing must not be left behind.'
+    Assert-True (Test-Path -LiteralPath $inboxKeepEmpty -PathType Container) 'A folder that was already empty was not emptied by this run and must survive.'
+    $inboxAfterClear = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Inbox'; ConfigPath = $configPath }
+    Assert-True ($inboxAfterClear.count -eq 2) 'Only uncleared items may remain in the inbox.'
+
+    # --- InboxClear: unknown items are an error, never a silent success ---
+    $unknownThrown = $false
+    try {
+        $null = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'InboxClear'; ConfigPath = $configPath; ItemIds = @('没有这个东西.md') }
+    } catch {
+        $unknownThrown = $_.Exception.Message.Contains('Unknown inbox item')
+    }
+    Assert-True $unknownThrown 'InboxClear must fail loudly on an item that is not in the inbox.'
+
+    $partialThrown = $false
+    try {
+        $null = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'InboxClear'; ConfigPath = $configPath; ItemIds = @('snippet.txt', '没有这个东西.md') }
+    } catch {
+        $partialThrown = $_.Exception.Message.Contains('Unknown inbox item')
+    }
+    Assert-True $partialThrown 'A bad id anywhere in the list must abort the whole clear.'
+    Assert-True (Test-Path -LiteralPath (Join-Path $inboxFolder 'snippet.txt') -PathType Leaf) 'A failed clear must not move any item.'
+
+    # --- InboxClear: escapes and the index note are refused ---
+    $escapeThrown = $false
+    try {
+        $null = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'InboxClear'; ConfigPath = $configPath; ItemIds = @('..\04-Work\Example.md') }
+    } catch {
+        $escapeThrown = $_.Exception.Message.Contains('outside the inbox folder')
+    }
+    Assert-True $escapeThrown 'InboxClear must refuse paths that escape the inbox folder.'
+    $indexThrown = $false
+    try {
+        $null = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'InboxClear'; ConfigPath = $configPath; ItemIds = @('00-Inbox.md') }
+    } catch {
+        $indexThrown = $_.Exception.Message.Contains('index note')
+    }
+    Assert-True $indexThrown 'InboxClear must refuse to move the inbox index note.'
+    Assert-True (Test-Path -LiteralPath (Join-Path $inboxFolder '00-Inbox.md') -PathType Leaf) 'The inbox index note must survive every clear.'
+
+    # --- InboxClear: a dropped folder clears as one unit, overlaps are refused ---
+    $inboxBundle = Join-Path $inboxFolder 'bundle'
+    New-Item -ItemType Directory -Path $inboxBundle -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $inboxBundle 'a.md'), 'a', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $inboxBundle 'b.md'), 'b', [Text.UTF8Encoding]::new($false))
+    $overlapThrown = $false
+    try {
+        $null = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'InboxClear'; ConfigPath = $configPath; ItemIds = @('bundle', 'bundle\a.md') }
+    } catch {
+        $overlapThrown = $_.Exception.Message.Contains('overlap')
+    }
+    Assert-True $overlapThrown 'Clearing a folder and its contents in one call must be refused, not half-applied.'
+    Assert-True (Test-Path -LiteralPath (Join-Path $inboxBundle 'a.md') -PathType Leaf) 'A refused overlap must leave the inbox untouched.'
+    $bundleClear = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'InboxClear'; ConfigPath = $configPath; ItemIds = @('bundle') }
+    Assert-True (@($bundleClear.moved)[0].kind -eq 'directory') 'A dropped folder must clear as a single directory item.'
+    Assert-True (-not (Test-Path -LiteralPath $inboxBundle)) 'A cleared folder must leave the inbox.'
+    Assert-True (Test-Path -LiteralPath (Join-Path ([string]$bundleClear.archiveRoot) 'bundle\b.md') -PathType Leaf) 'A cleared folder must reach the archive with its contents.'
+
+    # --- Inbox: an unconfigured inbox is an explicit error ---
+    $noInboxConfig = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $noInboxConfig.destinations.PSObject.Properties.Remove('inbox')
+    $noInboxConfigPath = Join-Path $testRoot 'config-noinbox.json'
+    [IO.File]::WriteAllText($noInboxConfigPath, ($noInboxConfig | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+    $noInboxThrown = $false
+    try {
+        $null = Invoke-JsonCommand -Tool $tool -Parameters @{ Command = 'Inbox'; ConfigPath = $noInboxConfigPath }
+    } catch {
+        $noInboxThrown = $_.Exception.Message.Contains('destinations.inbox')
+    }
+    Assert-True $noInboxThrown 'Inbox must say plainly that destinations.inbox is unconfigured.'
+
     [ordered]@{
         status = 'PASS'
         tests = @(
@@ -448,6 +555,15 @@ try {
             'discover empty roots'
             'report'
             'oldest-backlog fairness'
+            'inbox listing excludes the folder index note'
+            'inbox plain-text detection'
+            'inbox clear moves to archive'
+            'inbox clear prunes emptied folders only'
+            'inbox clear rejects unknown items'
+            'inbox clear is all-or-nothing'
+            'inbox clear containment and index-note refusal'
+            'inbox clear folder as one unit and overlap refusal'
+            'inbox unconfigured error'
         )
     } | ConvertTo-Json -Depth 4
 } finally {

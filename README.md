@@ -100,6 +100,8 @@ Obsidian分类与主笔记
 | `NewConfig` | 生成配置骨架（带编辑器自动补全的 `$schema` 引用） |
 | `Doctor` | 配置体检：路径、重叠、必填项、未知键警告 |
 | `Init` | 初始化状态、队列、备份与报告目录 |
+| `Inbox` | 列出收件箱里待归位的条目（相对路径、大小、修改时间、是否可直接读取），自动排除文件夹索引笔记 |
+| `InboxClear` | 把已归位的条目移入 `inbox-archive\<时间戳>\`（移动不删除），并清掉因此变空的子文件夹 |
 | `Scan` | 扫描来源并入队；清扫 missing 文件；记录扫描错误 |
 | `Next` | 只读取出一个公平批次；单列敏感与超大文件 |
 | `Approve` | 授权读取被隔离的敏感文件 |
@@ -110,7 +112,7 @@ Obsidian分类与主笔记
 | `Compact` | 归档旧历史到 `queue-archive.local.json`，可选清理旧备份 |
 | `Discover` | （须明确同意）只读元数据的目录盘点 |
 
-`-ItemIds` 接受完整队列 ID 或不少于 8 位的唯一前缀。
+`-ItemIds` 接受完整队列 ID 或不少于 8 位的唯一前缀；`InboxClear` 例外，它接受收件箱内的相对路径。
 
 ## 环境
 
@@ -224,4 +226,4 @@ $tool = ".\skills\grow-obsidian\scripts\grow-obsidian.ps1"
 powershell -NoProfile -ExecutionPolicy Bypass -File ".\tests\run-tests.ps1"
 ```
 
-测试在系统临时目录中验证：无损队列、目录剪枝、敏感文件隔离与授权、公平批次（最老积压优先）、超大文件排除、短 ID 前缀、确认机制、人工内容保护、冲突检测、残缺标记拒写、备份、supersede、missing 清扫、Fail/Requeue、Compact 归档与备份清理、Discover 同意门槛和 Report。兼容 Windows PowerShell 5.1 与 PowerShell 7。
+测试在系统临时目录中验证：无损队列、目录剪枝、敏感文件隔离与授权、公平批次（最老积压优先）、超大文件排除、短 ID 前缀、确认机制、人工内容保护、冲突检测、残缺标记拒写、备份、supersede、missing 清扫、Fail/Requeue、Compact 归档与备份清理、Discover 同意门槛、Report，以及收件箱（排除索引笔记、纯文本判定、归档式清空、未知条目报错且整批中止）。兼容 Windows PowerShell 5.1 与 PowerShell 7。

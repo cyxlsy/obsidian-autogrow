@@ -49,6 +49,22 @@ Run the doctor before any write:
 & $tool -Command Doctor -ConfigPath "<controller>\config.local.json"
 ```
 
+List whatever the user dropped into the inbox folder named by `destinations.inbox`:
+
+```powershell
+& $tool -Command Inbox -ConfigPath "<controller>\config.local.json"
+```
+
+Each item carries its inbox-relative path, size, modification time, extension, and `isPlainText` (whether it can be read directly, or needs a converter as with `.pdf`/`.docx`). The folder's own index note (`<folder>.md`) is never listed. Items flagged `sensitive` are shown to the user before being read, exactly like `Next` candidates. Never route an inbox item by filename alone; open it.
+
+Once an item has been filed into a canonical note, move it out of the inbox with its relative path:
+
+```powershell
+& $tool -Command InboxClear -ConfigPath "<controller>\config.local.json" -ItemIds <relative paths>
+```
+
+Nothing is deleted: items move to `controllerDataRoot\inbox-archive\<timestamp>\`, keeping their inbox-relative layout, so a wrong distillation can still be recovered. A dropped folder can be cleared as one unit by passing the folder's path; passing a folder and something inside it in the same call is refused. An unknown path, or one escaping the inbox, aborts the whole call before anything moves. Leave anything too vague to place in the inbox and report it.
+
 Scan approved roots and persist every eligible change:
 
 ```powershell
